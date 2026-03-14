@@ -12,14 +12,14 @@
     GUILD_ROSTER_UPDATE wird gedebounced (0,75 s), um bei großen Gilden Performance-Spitzen zu vermeiden.
 
     Optionen (Interface → AddOns → Gilden Zonenübersicht):
-    - Allgemein: Fenster-Hintergrund, Klassenfarbe, Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen.
+    - Allgemein: Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen.
     - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen".
       Oben blinkender Balken, unten Countdown-Balken für verbleibende Dauer.
     - Veränderungen tracken: Strich-Anzeige Dauer (Sekunden), Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen.
 
     SavedVariables: GuildZoneOverviewDB
-    DB-Keys: point, relativePoint, xOfs, yOfs, width, animationDurationSec, animationColor, backgroundColor,
-             useClassColorAnimation, useClassColorBackground, pulseWhenInactive, playSoundOnOnline,
+    DB-Keys: point, relativePoint, xOfs, yOfs, width, animationDurationSec, animationColor,
+             useClassColorAnimation, pulseWhenInactive, playSoundOnOnline,
              showFrameInGroup, floatingLineDurationSec, trackChangesInstance, trackChangesRaid, trackChangesDelve.
 ]]
 local addonName = ...
@@ -33,7 +33,6 @@ local DB_DEFAULTS = {
     animationDurationSec = 10,
     animationColor = { 1, 1, 1 },
     useClassColorAnimation = false,
-    useClassColorBackground = false,
     pulseWhenInactive = true,
     playSoundOnOnline = true,
     showFrameInGroup = true,
@@ -51,9 +50,6 @@ local function ApplyDBDefaults()
     end
     for key, default in pairs(DB_DEFAULTS) do
         if db[key] == nil then db[key] = default end
-    end
-    if not db.backgroundColor then
-        db.backgroundColor = { 0.05, 0.05, 0.08, 0.9 }
     end
 end
 
@@ -132,7 +128,19 @@ local function GetDurationColor(minutes)
     return DURATION_BUCKETS[#DURATION_BUCKETS].color
 end
 
-local frame = CreateFrame("Frame", "GuildZoneOverviewFrame", UIParent)
+local TOOLTIP_BACKDROP = {
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true,
+    tileEdge = true,
+    tileSize = 8,
+    edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
+}
+local frame = CreateFrame("Frame", "GuildZoneOverviewFrame", UIParent, "BackdropTemplate")
+frame:SetBackdrop(TOOLTIP_BACKDROP)
+frame:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+frame:SetBackdropBorderColor(0.4, 0.4, 0.5, 0.8)
 frame:SetHeight(120)
 frame:SetPoint("CENTER", UIParent, "CENTER", 0, 200)
 frame:SetMovable(true)
@@ -162,31 +170,11 @@ local function CreateTexture(parent, layer, r, g, b, a, h)
     return t
 end
 
-local frameBg = CreateTexture(frame, "BACKGROUND", 0.05, 0.05, 0.08, 0.9)
-local function ApplyBackgroundColor()
-    if not frameBg then return end
-    local r, g, b, a
-    if GuildZoneOverviewDB.useClassColorBackground then
-        local cr, cg, cb = GetPlayerClassColor()
-        if cr and cg and cb then
-            r, g, b = cr, cg, cb
-        end
-    end
-    local c = GuildZoneOverviewDB.backgroundColor
-    if not r then
-        if not c or #c < 4 then return end
-        r, g, b, a = c[1], c[2], c[3], c[4]
-    else
-        a = (c and c[4]) or 0.9
-    end
-    frameBg:SetColorTexture(r, g, b, a)
-end
-ApplyBackgroundColor()
-
+local TOP_BORDER_PAD = 4
 local topBorder = CreateTexture(frame, "ARTWORK", 0, 0.8, 1, 1, 2)
 topBorder:ClearAllPoints()
-topBorder:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-topBorder:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+topBorder:SetPoint("TOPLEFT", frame, "TOPLEFT", TOP_BORDER_PAD, 0)
+topBorder:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -TOP_BORDER_PAD, 0)
 
 local COUNTDOWN_BAR_HEIGHT = 4
 local countdownBar = CreateFrame("Frame", nil, frame)
@@ -433,17 +421,18 @@ local function StartFloatingLineTicker()
 end
 StartFloatingLineTicker()
 
-local detailsFrame = CreateFrame("Frame", nil, frame)
+local detailsFrame = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+detailsFrame:SetBackdrop(TOOLTIP_BACKDROP)
+detailsFrame:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+detailsFrame:SetBackdropBorderColor(0.4, 0.4, 0.5, 0.8)
 detailsFrame:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -2)
 detailsFrame:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -2)
 detailsFrame:Hide()
 
-CreateTexture(detailsFrame, "BACKGROUND", 0.05, 0.05, 0.08, 0.95)
-
 local dTopBorder = CreateTexture(detailsFrame, "ARTWORK", 0.6, 0.2, 0.9, 1, 2)
 dTopBorder:ClearAllPoints()
-dTopBorder:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 0, 0)
-dTopBorder:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", 0, 0)
+dTopBorder:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", TOP_BORDER_PAD, 0)
+dTopBorder:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", -TOP_BORDER_PAD, 0)
 
 detailsFrame:EnableMouse(true)
 
@@ -782,7 +771,6 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" and arg1 == addonName then
         ApplyDBDefaults()
         GuildZoneOverviewDB = _G["GuildZoneOverviewDB"]
-        ApplyBackgroundColor()
         RestorePosition()
         if GuildZoneOverviewOptionsPanel and GuildZoneOverviewOptionsPanel.refresh then
             GuildZoneOverviewOptionsPanel:refresh()
@@ -891,46 +879,17 @@ do
     genTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -16)
     genTitle:SetText("Allgemein")
 
-    local function bgGetColor()
-        local c = GuildZoneOverviewDB.backgroundColor or { 0.05, 0.05, 0.08, 0.9 }
-        local r, g, b = c[1], c[2], c[3]
-        if GuildZoneOverviewDB.useClassColorBackground then
-            local cr, cg, cb = GetPlayerClassColor()
-            if cr and cg and cb then r, g, b = cr, cg, cb end
-        end
-        return r, g, b, c[4] or 1
-    end
-    local function bgUpdateSwatch(tex)
-        local c = GuildZoneOverviewDB.backgroundColor or { 0.05, 0.05, 0.08, 0.9 }
-        local r, g, b = c[1], c[2], c[3]
-        if GuildZoneOverviewDB.useClassColorBackground then
-            local cr, cg, cb = GetPlayerClassColor()
-            if cr and cg and cb then r, g, b = cr, cg, cb end
-        end
-        tex:SetColorTexture(r, g, b, c[4] or 1)
-        ApplyBackgroundColor()
-    end
-    local bgRow = makeColorPickerRow(panel, -44, "Fenster-Hintergrund", "backgroundColor", true, "useClassColorBackground", "GZOBgClassColorCheck",
-        bgGetColor,
-        function(r, g, b, a)
-            GuildZoneOverviewDB.backgroundColor = { r, g, b, a }
-            GuildZoneOverviewDB.useClassColorBackground = false
-            bgRow.classCheck:SetChecked(false)
-            if frameBg then frameBg:SetColorTexture(r, g, b, a) end
-        end,
-        bgUpdateSwatch
-    )
-    local pulseCheck = makeCheckBox(panel, -90, "GZOPulseWhenInactive", "Dezente Pulsierung wenn inaktiv", "pulseWhenInactive")
-    local showInGroupCheck = makeCheckBox(panel, -112, "GZOShowInGroupCheck", "Fenster auch in Gruppe anzeigen (z. B. in Tiefen)", "showFrameInGroup", function()
+    local pulseCheck = makeCheckBox(panel, -44, "GZOPulseWhenInactive", "Dezente Pulsierung wenn inaktiv", "pulseWhenInactive")
+    local showInGroupCheck = makeCheckBox(panel, -66, "GZOShowInGroupCheck", "Fenster auch in Gruppe anzeigen (z. B. in Tiefen)", "showFrameInGroup", function()
         UpdateVisibility()
     end)
 
     local animTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    animTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -148)
+    animTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -102)
     animTitle:SetText("Animation & Benachrichtigung")
 
     local durationLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    durationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -176)
+    durationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -130)
     durationLabel:SetText("Dauer (Sekunden)")
 
     local function makeDurationSlider(panel, sliderY, frameName, dbKey)
@@ -955,7 +914,7 @@ do
         cfg.valueText = valueText
         return cfg
     end
-    local durationSliderConfig = makeDurationSlider(panel, -196, "GZODurationSlider", "animationDurationSec")
+    local durationSliderConfig = makeDurationSlider(panel, -150, "GZODurationSlider", "animationDurationSec")
 
     local function animGetColor()
         local c = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
@@ -975,7 +934,7 @@ do
         end
         tex:SetColorTexture(r, g, b, 1)
     end
-    local animRow = makeColorPickerRow(panel, -232, "Animationsfarbe", "animationColor", false, "useClassColorAnimation", "GZOAnimClassColorCheck",
+    local animRow = makeColorPickerRow(panel, -186, "Animationsfarbe", "animationColor", false, "useClassColorAnimation", "GZOAnimClassColorCheck",
         animGetColor,
         function(r, g, b)
             GuildZoneOverviewDB.animationColor = { r, g, b }
@@ -985,10 +944,10 @@ do
         animUpdateSwatch
     )
 
-    local soundCheck = makeCheckBox(panel, -278, "GZOSoundCheck", "Sound abspielen ('Bnet Toast'), wenn jemand online kommt", "playSoundOnOnline")
+    local soundCheck = makeCheckBox(panel, -232, "GZOSoundCheck", "Sound abspielen ('Bnet Toast'), wenn jemand online kommt", "playSoundOnOnline")
 
     local testBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    testBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -308)
+    testBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -262)
     testBtn:SetSize(180, 22)
     if testBtn.SetText then
         testBtn:SetText("Online-Anzeige testen")
@@ -1003,14 +962,14 @@ do
 
     -- Abschnitt: Veränderungen tracken (Striche grün/rot pro Kategorie, Test-Buttons)
     local trackTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    trackTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -338)
+    trackTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -292)
     trackTitle:SetText("Veränderungen tracken")
 
     local lineDurationLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    lineDurationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -358)
+    lineDurationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -312)
     lineDurationLabel:SetText("Strich-Anzeige Dauer (Sekunden)")
 
-    local lineDurationSliderConfig = makeDurationSlider(panel, -378, "GZOLineDurationSlider", "floatingLineDurationSec")
+    local lineDurationSliderConfig = makeDurationSlider(panel, -332, "GZOLineDurationSlider", "floatingLineDurationSec")
 
     -- Test-Zeile in der nächsten freien Zeile unter den sichtbaren Kategorien (layoutBottomY aus UpdateGuildZoneCounts)
     local function makeTrackRow(y, key, label, dbKey)
@@ -1052,9 +1011,9 @@ do
         btnMinus:SetScript("OnClick", function() runFloatingSimulation(-1) end)
         return cb
     end
-    local trackInstCheck = makeTrackRow(-398, "instance", "Instanzen", "trackChangesInstance")
-    local trackRaidCheck = makeTrackRow(-426, "raid", "Raids", "trackChangesRaid")
-    local trackDelveCheck = makeTrackRow(-454, "delve", "Tiefen", "trackChangesDelve")
+    local trackInstCheck = makeTrackRow(-352, "instance", "Instanzen", "trackChangesInstance")
+    local trackRaidCheck = makeTrackRow(-380, "raid", "Raids", "trackChangesRaid")
+    local trackDelveCheck = makeTrackRow(-408, "delve", "Tiefen", "trackChangesDelve")
 
     local durationSliderConfigs = { durationSliderConfig, lineDurationSliderConfig }
     panel.refresh = function()
@@ -1066,7 +1025,6 @@ do
             cfg.skipWrite = false
         end
 
-        bgRow.classCheck:SetChecked(GuildZoneOverviewDB.useClassColorBackground)
         animRow.classCheck:SetChecked(GuildZoneOverviewDB.useClassColorAnimation)
         pulseCheck:SetChecked(GuildZoneOverviewDB.pulseWhenInactive)
         showInGroupCheck:SetChecked(GuildZoneOverviewDB.showFrameInGroup)
@@ -1075,7 +1033,6 @@ do
         trackRaidCheck:SetChecked(GuildZoneOverviewDB.trackChangesRaid)
         trackDelveCheck:SetChecked(GuildZoneOverviewDB.trackChangesDelve)
 
-        bgRow.updateSwatch(bgRow.tex)
         animRow.updateSwatch(animRow.tex)
     end
 
