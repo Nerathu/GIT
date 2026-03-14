@@ -1,0 +1,12 @@
+## Interface: 120001
+## Title: Renewing Mist Tracker
+## Author: roman + Cursor
+## Version: 1.0.0
+## Notes: Zeigt, wie viele Gruppen-/Raidmitglieder deinen Renewing Mist Buff aktiv haben.
+## IconTexture: Interface\Icons\ability_monk_renewingmists
+## SavedVariables: RenewingMistTrackerDB
+## LoadOnDemand: 0
+## DefaultState: enabled
+## X-Class: MONK
+
+RenewingMistTracker.lua
