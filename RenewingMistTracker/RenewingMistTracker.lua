@@ -52,6 +52,14 @@ text:SetFont("Fonts\\FRIZQT__.TTF", 20, "THICKOUTLINE")
 -- Logic
 --======================================================================
 
+local MISTWEAVER_SPEC_ID = 270
+
+local function IsMistweaver()
+    if select(2, UnitClass("player")) ~= "MONK" then return false end
+    local specID = GetSpecialization and GetSpecialization() and select(1, GetSpecializationInfo(GetSpecialization()))
+    return specID == MISTWEAVER_SPEC_ID
+end
+
 local function GetActiveRemCount()
     local count = 0
     -- Wir nutzen die Gruppen-Iteratoren für maximale Performance
@@ -83,9 +91,9 @@ local function GetMaxRemTargets()
 end
 
 local function UpdateUI()
-    if not db or (select(2, UnitClass("player")) ~= "MONK") then 
-        frame:Hide() 
-        return 
+    if not db or not IsMistweaver() then
+        frame:Hide()
+        return
     end
     if db.hideInCombat and UnitAffectingCombat("player") then
         frame:Hide()
@@ -213,3 +221,4 @@ frame:RegisterEvent("UNIT_AURA")
 frame:RegisterEvent("PLAYER_REGEN_ENABLED")   -- Kampf verlassen -> ggf. anzeigen
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")  -- Kampf betreten -> ggf. verstecken
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")  -- Instanz-Wechsel -> ggf. anzeigen/verstecken
+frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")  -- Spec-Wechsel (z.B. zu/weg Mistweaver)
