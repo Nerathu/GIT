@@ -4,32 +4,34 @@
     Zeigt online Gildenmitglieder nach Kategorien (Instanzen, Raids, Tiefen, Städte, Sonstiges).
     Sichtbar je nach Option auch in Gruppe (z. B. in Tiefen). Klick auf eine Kategorie öffnet
     die Detail-Liste (Name - Zone, klassengefärbt). Pro Kategorie eigene Schriftfarbe; in der
-    Detail-Liste optional Dauer-Indikator (grün 0–10 min, orange 10–40 min, rot >40 min in Zone)
+    Detail-Liste optional Dauer-Indikator (grün 0–25 min, orange 25–45 min, rot >45 min in Zone)
     und Zonen-Trenner bei Sonstiges/Instanzen/Raids.
+    Spieler in den ersten 5 Minuten in Instanz/Raid/Tiefe blinken in der Detail-Liste leicht.
+    Die geöffnete Detail-Ansicht wird bei Roster-Update aktualisiert (Count und Liste bleiben konsistent).
 
     Bei Änderungen in Instanz/Raid/Tiefe erscheinen optional grüne/rote Striche (ein Strich pro
     Änderung); neue Striche rechts angehängt, nach jedem 5. Strich ein Abstand, Dauer einstellbar.
+    Die Kategoriezeile (Instanz/Raid/Tiefe) bleibt sichtbar, bis alle Striche abgelaufen sind.
     GUILD_ROSTER_UPDATE wird gedebounced (0,75 s), um bei großen Gilden Performance-Spitzen zu vermeiden.
 
     Optionen (Interface → AddOns → Gilden Zonenübersicht):
-    - Allgemein: Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen.
+    - Allgemein: Fenster-Design (Minimal/Talente/Berufe – drei UI-Designs), Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen.
     - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen".
       Oben blinkender Balken, unten Countdown-Balken für verbleibende Dauer.
     - Veränderungen tracken: Strich-Anzeige Dauer (Sekunden), Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen.
 
     SavedVariables: GuildZoneOverviewDB
-    DB-Keys: point, relativePoint, xOfs, yOfs, width, animationDurationSec, animationColor,
+    DB-Keys: point, relativePoint, xOfs, yOfs, width, frameTheme, animationDurationSec, animationColor,
              useClassColorAnimation, pulseWhenInactive, playSoundOnOnline,
              showFrameInGroup, floatingLineDurationSec, trackChangesInstance, trackChangesRaid, trackChangesDelve.
 ]]
 local addonName = ...
-local ADDON_VERSION = "1.3.0"
-
-local GuildZoneOverview = {}
+local ADDON_VERSION = "1.4.0"
 
 GuildZoneOverviewDB = GuildZoneOverviewDB or {}
 
 local DB_DEFAULTS = {
+    frameTheme = "minimal",
     animationDurationSec = 10,
     animationColor = { 1, 1, 1 },
     useClassColorAnimation = false,
@@ -97,9 +99,9 @@ local isTestingFloating = false
 local prevPlayerZones = {}      -- name -> zone
 local playerZoneFirstSeen = {}  -- name -> GetTime() beim Eintritt in Zone
 local DURATION_BUCKETS = {
-    { maxMin = 10,  color = { 0.4, 0.85, 0.4 } },   -- 1–10 min: Grün
-    { maxMin = 40,  color = { 0.95, 0.65, 0.35 } }, -- 10–40 min: Orange
-    { maxMin = 1e9, color = { 0.9, 0.35, 0.35 } }, -- >40 min: Rot
+    { maxMin = 25,  color = { 0.4, 0.85, 0.4 } },   -- 0–25 min: Grün
+    { maxMin = 45,  color = { 0.95, 0.65, 0.35 } }, -- 25–45 min: Orange
+    { maxMin = 1e9, color = { 0.9, 0.35, 0.35 } }, -- >45 min: Rot
 }
 local ORDERED_CATEGORY_KEYS = { "instance", "raid", "delve", "city", "other" }
 local CATEGORY_LABELS = { instance = "Instanzen", raid = "Raids", delve = "Tiefen", city = "Städte", other = "Sonstiges" }
@@ -128,6 +130,7 @@ local function GetDurationColor(minutes)
     return DURATION_BUCKETS[#DURATION_BUCKETS].color
 end
 
+-- UI-Designs: Minimal (Tooltip-Look), Talente (Panel/Dialog), Berufe (parchment/warm)
 local TOOLTIP_BACKDROP = {
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -137,6 +140,53 @@ local TOOLTIP_BACKDROP = {
     edgeSize = 16,
     insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
+local DIALOG_BACKDROP = {
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true,
+    tileEdge = true,
+    tileSize = 32,
+    edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 },
+}
+local UI_THEMES = {
+    minimal = {
+        label = "Minimal (Standard)",
+        backdrop = TOOLTIP_BACKDROP,
+        bgColor = { 0.05, 0.05, 0.08, 0.95 },
+        borderColor = { 0.4, 0.4, 0.5, 0.8 },
+    },
+    talente = {
+        label = "Talente",
+        backdrop = DIALOG_BACKDROP,
+        bgColor = { 0.06, 0.06, 0.12, 0.98 },
+        borderColor = { 0.35, 0.35, 0.55, 0.9 },
+    },
+    berufe = {
+        label = "Berufe",
+        backdrop = DIALOG_BACKDROP,
+        bgColor = { 0.18, 0.14, 0.1, 0.98 },
+        borderColor = { 0.5, 0.38, 0.28, 0.9 },
+    },
+}
+local DEFAULT_FRAME_THEME = "minimal"
+
+local function ApplyFrameTheme(themeKey)
+    -- Frames per Namen/Referenz holen (Options-Panel läuft in do-Block, Upvalues frame/detailsFrame sind dort nil)
+    local mainFrame = _G["GuildZoneOverviewFrame"]
+    local detailsFrameRef = mainFrame and mainFrame.detailsFrame
+    local theme = UI_THEMES[themeKey] or UI_THEMES[DEFAULT_FRAME_THEME]
+    if not theme or not mainFrame or not mainFrame.SetBackdrop then return end
+    mainFrame:SetBackdrop(theme.backdrop)
+    mainFrame:SetBackdropColor(theme.bgColor[1], theme.bgColor[2], theme.bgColor[3], theme.bgColor[4])
+    mainFrame:SetBackdropBorderColor(theme.borderColor[1], theme.borderColor[2], theme.borderColor[3], theme.borderColor[4])
+    if detailsFrameRef and detailsFrameRef.SetBackdrop then
+        detailsFrameRef:SetBackdrop(theme.backdrop)
+        detailsFrameRef:SetBackdropColor(theme.bgColor[1], theme.bgColor[2], theme.bgColor[3], theme.bgColor[4])
+        detailsFrameRef:SetBackdropBorderColor(theme.borderColor[1], theme.borderColor[2], theme.borderColor[3], theme.borderColor[4])
+    end
+end
+
 local frame = CreateFrame("Frame", "GuildZoneOverviewFrame", UIParent, "BackdropTemplate")
 frame:SetBackdrop(TOOLTIP_BACKDROP)
 frame:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
@@ -422,6 +472,7 @@ end
 StartFloatingLineTicker()
 
 local detailsFrame = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+frame.detailsFrame = detailsFrame
 detailsFrame:SetBackdrop(TOOLTIP_BACKDROP)
 detailsFrame:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
 detailsFrame:SetBackdropBorderColor(0.4, 0.4, 0.5, 0.8)
@@ -484,14 +535,41 @@ local DETAIL_LEFT_PAD = 10
 local DETAIL_RIGHT_PAD = -10
 local DETAIL_ROW_HEIGHT = 16
 local DETAIL_TOP_PAD = 10
+local DETAIL_FLIP_THRESHOLD = 20  -- Detail-Frame unter dem Hauptframe, wenn weniger Platz (px)
 local SEPARATOR_HEIGHT = 2
 local SEPARATOR_PADDING = 4
 local detailLines = {}
 local detailSeparators = {}
 
+-- Leichtes Blinken für Spieler in den ersten 5 Min in Instanz/Raid/Tiefe (Detail-Liste); nach detailLines definiert
+local detailBlinkPhase = 0
+if C_Timer and C_Timer.NewTicker then
+    C_Timer.NewTicker(0.1, function()
+        if not detailLines or not detailsFrame or not detailsFrame:IsShown() or not currentDetailsCategory then return end
+        detailBlinkPhase = detailBlinkPhase + 0.2
+        local now = GetTime()
+        for _, entry in ipairs(detailLines) do
+            if entry.fs and entry.fs:IsShown() then
+                local shouldBlink = false
+                if entry.blinkCategory and entry.playerName and playerZoneFirstSeen[entry.playerName] then
+                    local durationMin = (now - playerZoneFirstSeen[entry.playerName]) / 60
+                    shouldBlink = durationMin < 5
+                end
+                if shouldBlink then
+                    entry.fs:SetAlpha(0.65 + 0.35 * math.sin(detailBlinkPhase))
+                else
+                    entry.fs:SetAlpha(1)
+                end
+            end
+        end
+    end)
+end
+
 local function ClearDetailLines()
     for _, entry in ipairs(detailLines) do
-        if entry.fs then entry.fs:SetText(""); entry.fs:Hide() end
+        entry.playerName = nil
+        entry.blinkCategory = nil
+        if entry.fs then entry.fs:SetText(""); entry.fs:Hide(); entry.fs:SetAlpha(1) end
         if entry.tex then entry.tex:Hide() end
     end
     for _, sep in ipairs(detailSeparators) do sep:Hide() end
@@ -532,23 +610,14 @@ local function EnsureDetailEntry(index)
     return detailLines[index]
 end
 
-local function ShowDetails(categoryKey)
+local function BuildDetailLines(categoryKey)
     local members = membersByCategory[categoryKey]
-
-    if currentDetailsCategory == categoryKey and detailsFrame:IsShown() then
-        detailsFrame:Hide()
-        currentDetailsCategory = nil
-        return
-    end
-
+    if not members then return end
     table.sort(members, function(a, b)
         if a.zone == b.zone then return a.name < b.name end
         return a.zone < b.zone
     end)
-
-    currentDetailsCategory = categoryKey
     ClearDetailLines()
-
     local yOffset = -DETAIL_TOP_PAD
     local index = 1
     local leftWithIndicator = DETAIL_LEFT_PAD + DETAIL_INDICATOR_SIZE + DETAIL_INDICATOR_GAP
@@ -570,6 +639,8 @@ local function ShowDetails(categoryKey)
 
             local entry = EnsureDetailEntry(index)
             local fs, tex = entry.fs, entry.tex
+            entry.playerName = info.name
+            entry.blinkCategory = (categoryKey == "instance" or categoryKey == "raid" or categoryKey == "delve") and categoryKey or nil
 
             tex:ClearAllPoints()
             tex:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", DETAIL_LEFT_PAD, yOffset - 4)
@@ -596,6 +667,8 @@ local function ShowDetails(categoryKey)
         end
     else
         local entry = EnsureDetailEntry(1)
+        entry.playerName = nil
+        entry.blinkCategory = nil
         entry.tex:Hide()
         local fs = entry.fs
         fs:ClearAllPoints()
@@ -611,14 +684,23 @@ local function ShowDetails(categoryKey)
 
     detailsFrame:ClearAllPoints()
     local frameBottom = frame:GetBottom() or 0
-    if frameBottom - desiredHeight < 20 then
+    if frameBottom - desiredHeight < DETAIL_FLIP_THRESHOLD then
         detailsFrame:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 0, 2)
         detailsFrame:SetPoint("BOTTOMRIGHT", frame, "TOPRIGHT", 0, 2)
     else
         detailsFrame:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -2)
         detailsFrame:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -2)
     end
+end
 
+local function ShowDetails(categoryKey)
+    if currentDetailsCategory == categoryKey and detailsFrame:IsShown() then
+        detailsFrame:Hide()
+        currentDetailsCategory = nil
+        return
+    end
+    currentDetailsCategory = categoryKey
+    BuildDetailLines(categoryKey)
     detailsFrame:Show()
     RefreshAlpha()
 end
@@ -696,7 +778,7 @@ local function UpdateGuildZoneCounts()
         local displayText = string.format("%s - %s", name, zone)
         local durationMin = playerZoneFirstSeen[name] and (now - playerZoneFirstSeen[name]) / 60 or 0
         local durationColor = (category ~= "other") and GetDurationColor(durationMin) or nil
-        table.insert(membersByCategory[category], { name = name, class = class, zone = zone, displayText = displayText, durationColor = durationColor })
+        table.insert(membersByCategory[category], { name = name, class = class, zone = zone, displayText = displayText, durationColor = durationColor, durationMin = durationMin })
 
         measureFS:SetText(displayText)
         local totalLineWidth = measureFS:GetStringWidth() or 0
@@ -720,11 +802,26 @@ local function UpdateGuildZoneCounts()
     end
     prevOnlineCount = totalOnline
 
+    -- Grüne/rote Striche bei Änderung (vor Anzeige-Logik, damit roter Strich bei 0 sichtbar bleibt)
+    if not isInitialLoad then
+        for _, key in ipairs(FLOATING_LINE_KEYS) do
+            local dbKey = TRACK_CHANGES_DB_KEYS[key]
+            if dbKey and GuildZoneOverviewDB[dbKey] then
+                local diff = counts[key] - (prevCategoryCounts[key] or 0)
+                if diff ~= 0 and categoryRows[key] then
+                    SpawnFloatingDiff(categoryRows[key], diff)
+                end
+            end
+        end
+    end
+
     local y = -26
     local step = -18
     for _, key in ipairs(ORDERED_CATEGORY_KEYS) do
         local row = categoryRows[key]
-        if row and counts[key] and counts[key] > 0 then
+        local hasCount = row and counts[key] and counts[key] > 0
+        local hasLines = row and row.floatingLines and #row.floatingLines > 0
+        if hasCount or hasLines then
             row.btn:Show()
             row.btn:ClearAllPoints()
             row.btn:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, y)
@@ -736,22 +833,13 @@ local function UpdateGuildZoneCounts()
     end
     layoutBottomY = y
 
-    -- Grüne/rote Striche bei Änderung (nur wenn Option für Kategorie aktiv)
-    if not isInitialLoad then
-        for _, key in ipairs(FLOATING_LINE_KEYS) do
-            local dbKey = TRACK_CHANGES_DB_KEYS[key]
-            if dbKey and GuildZoneOverviewDB[dbKey] then
-                local diff = counts[key] - (prevCategoryCounts[key] or 0)
-                if diff ~= 0 and categoryRows[key] and categoryRows[key].btn:IsShown() then
-                    SpawnFloatingDiff(categoryRows[key], diff)
-                end
-            end
-        end
-    end
-
     -- Counter für den nächsten Durchlauf speichern
     for k, v in pairs(counts) do
         prevCategoryCounts[k] = v
+    end
+    -- Detail-Liste aktualisieren, wenn geöffnet, damit Count und Liste übereinstimmen
+    if detailsFrame and detailsFrame:IsShown() and currentDetailsCategory then
+        BuildDetailLines(currentDetailsCategory)
     end
     isInitialLoad = false
 end
@@ -772,6 +860,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         ApplyDBDefaults()
         GuildZoneOverviewDB = _G["GuildZoneOverviewDB"]
         RestorePosition()
+        ApplyFrameTheme(GuildZoneOverviewDB.frameTheme or DEFAULT_FRAME_THEME)
         if GuildZoneOverviewOptionsPanel and GuildZoneOverviewOptionsPanel.refresh then
             GuildZoneOverviewOptionsPanel:refresh()
         end
@@ -879,17 +968,47 @@ do
     genTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -16)
     genTitle:SetText("Allgemein")
 
-    local pulseCheck = makeCheckBox(panel, -44, "GZOPulseWhenInactive", "Dezente Pulsierung wenn inaktiv", "pulseWhenInactive")
-    local showInGroupCheck = makeCheckBox(panel, -66, "GZOShowInGroupCheck", "Fenster auch in Gruppe anzeigen (z. B. in Tiefen)", "showFrameInGroup", function()
+    local themeLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    themeLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -44)
+    themeLabel:SetText("Fenster-Design")
+
+    local themeDropdown = CreateFrame("Frame", "GZOFrameThemeDropDown", panel, "UIDropDownMenuTemplate")
+    themeDropdown:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -64)
+    local themeOrder = { "minimal", "talente", "berufe" }
+    UIDropDownMenu_Initialize(themeDropdown, function(self, level, menuList)
+        for _, key in ipairs(themeOrder) do
+            local theme = UI_THEMES[key]
+            if theme then
+                local k, label = key, theme.label
+                UIDropDownMenu_AddButton({
+                    text = label,
+                    value = k,
+                    func = function()
+                        GuildZoneOverviewDB.frameTheme = k
+                        ApplyFrameTheme(k)
+                        UIDropDownMenu_SetSelectedValue(themeDropdown, k)
+                        if UIDropDownMenu_SetSelectedName then
+                            UIDropDownMenu_SetSelectedName(themeDropdown, label)
+                        end
+                    end,
+                })
+            end
+        end
+    end)
+    UIDropDownMenu_SetSelectedValue(themeDropdown, GuildZoneOverviewDB.frameTheme or DEFAULT_FRAME_THEME)
+    UIDropDownMenu_JustifyText(themeDropdown, "LEFT")
+
+    local pulseCheck = makeCheckBox(panel, -92, "GZOPulseWhenInactive", "Dezente Pulsierung wenn inaktiv", "pulseWhenInactive")
+    local showInGroupCheck = makeCheckBox(panel, -114, "GZOShowInGroupCheck", "Fenster auch in Gruppe anzeigen (z. B. in Tiefen)", "showFrameInGroup", function()
         UpdateVisibility()
     end)
 
     local animTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    animTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -102)
+    animTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -148)
     animTitle:SetText("Animation & Benachrichtigung")
 
     local durationLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    durationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -130)
+    durationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -176)
     durationLabel:SetText("Dauer (Sekunden)")
 
     local function makeDurationSlider(panel, sliderY, frameName, dbKey)
@@ -914,7 +1033,7 @@ do
         cfg.valueText = valueText
         return cfg
     end
-    local durationSliderConfig = makeDurationSlider(panel, -150, "GZODurationSlider", "animationDurationSec")
+    local durationSliderConfig = makeDurationSlider(panel, -196, "GZODurationSlider", "animationDurationSec")
 
     local function animGetColor()
         local c = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
@@ -934,7 +1053,7 @@ do
         end
         tex:SetColorTexture(r, g, b, 1)
     end
-    local animRow = makeColorPickerRow(panel, -186, "Animationsfarbe", "animationColor", false, "useClassColorAnimation", "GZOAnimClassColorCheck",
+    local animRow = makeColorPickerRow(panel, -232, "Animationsfarbe", "animationColor", false, "useClassColorAnimation", "GZOAnimClassColorCheck",
         animGetColor,
         function(r, g, b)
             GuildZoneOverviewDB.animationColor = { r, g, b }
@@ -944,10 +1063,10 @@ do
         animUpdateSwatch
     )
 
-    local soundCheck = makeCheckBox(panel, -232, "GZOSoundCheck", "Sound abspielen ('Bnet Toast'), wenn jemand online kommt", "playSoundOnOnline")
+    local soundCheck = makeCheckBox(panel, -278, "GZOSoundCheck", "Sound abspielen ('Bnet Toast'), wenn jemand online kommt", "playSoundOnOnline")
 
     local testBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    testBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -262)
+    testBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -308)
     testBtn:SetSize(180, 22)
     if testBtn.SetText then
         testBtn:SetText("Online-Anzeige testen")
@@ -962,14 +1081,14 @@ do
 
     -- Abschnitt: Veränderungen tracken (Striche grün/rot pro Kategorie, Test-Buttons)
     local trackTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    trackTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -292)
+    trackTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -338)
     trackTitle:SetText("Veränderungen tracken")
 
     local lineDurationLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    lineDurationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -312)
+    lineDurationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -358)
     lineDurationLabel:SetText("Strich-Anzeige Dauer (Sekunden)")
 
-    local lineDurationSliderConfig = makeDurationSlider(panel, -332, "GZOLineDurationSlider", "floatingLineDurationSec")
+    local lineDurationSliderConfig = makeDurationSlider(panel, -378, "GZOLineDurationSlider", "floatingLineDurationSec")
 
     -- Test-Zeile in der nächsten freien Zeile unter den sichtbaren Kategorien (layoutBottomY aus UpdateGuildZoneCounts)
     local function makeTrackRow(y, key, label, dbKey)
@@ -1011,12 +1130,18 @@ do
         btnMinus:SetScript("OnClick", function() runFloatingSimulation(-1) end)
         return cb
     end
-    local trackInstCheck = makeTrackRow(-352, "instance", "Instanzen", "trackChangesInstance")
-    local trackRaidCheck = makeTrackRow(-380, "raid", "Raids", "trackChangesRaid")
-    local trackDelveCheck = makeTrackRow(-408, "delve", "Tiefen", "trackChangesDelve")
+    local trackInstCheck = makeTrackRow(-398, "instance", "Instanzen", "trackChangesInstance")
+    local trackRaidCheck = makeTrackRow(-426, "raid", "Raids", "trackChangesRaid")
+    local trackDelveCheck = makeTrackRow(-454, "delve", "Tiefen", "trackChangesDelve")
 
     local durationSliderConfigs = { durationSliderConfig, lineDurationSliderConfig }
     panel.refresh = function()
+        local themeKey = GuildZoneOverviewDB.frameTheme or DEFAULT_FRAME_THEME
+        UIDropDownMenu_SetSelectedValue(themeDropdown, themeKey)
+        local theme = UI_THEMES[themeKey]
+        if theme and UIDropDownMenu_SetSelectedName then
+            UIDropDownMenu_SetSelectedName(themeDropdown, theme.label)
+        end
         for _, cfg in ipairs(durationSliderConfigs) do
             cfg.skipWrite = true
             local val = GuildZoneOverviewDB[cfg.dbKey] or 10

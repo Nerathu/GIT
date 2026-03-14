@@ -9,7 +9,7 @@
 ## Title-deDE: Gilden Zonenübersicht
 ## Notes: Zeigt an, wie viele Gildenmitglieder in Instanzen, Raids und Städten sind (nur sichtbar, wenn du in keiner Gruppe bist).
 ## Author: roman + Cursor
-## Version: 1.1.2
+## Version: 1.4.0
 ## IconTexture: Interface\Icons\inv_misc_grouplooking
 ## SavedVariables: GuildZoneOverviewDB
 

@@ -3,10 +3,11 @@
 WoW-Addon für Retail (Midnight / 12.0.1), das in einem verschiebbaren Frame anzeigt, wie viele Gildenmitglieder sich in **Instanzen**, **Raids**, **Tiefen**, **Städten** und **Sonstiges** befinden.
 
 - **Sichtbarkeit:** Standardmäßig nur ohne Gruppe/Raid; optional (in den Optionen) auch **in Gruppe anzeigen** (z. B. in Tiefen).
-- **Klick auf eine Kategorie:** Detail-Liste mit allen Spielern (Name – Zone, klassengefärbt). Bei Instanzen, Raids, Tiefen und Städten: **Dauer-Indikator** (grün 0–10 min, orange 10–40 min, rot >40 min in der Zone). Bei Sonstiges, Instanzen und Raids: **Zonen-Trenner** zwischen verschiedenen Zonen.
+- **Klick auf eine Kategorie:** Detail-Liste mit allen Spielern (Name – Zone, klassengefärbt). Bei Instanzen, Raids, Tiefen und Städten: **Dauer-Indikator** (grün 0–25 min, orange 25–45 min, rot >45 min in der Zone). Bei Sonstiges, Instanzen und Raids: **Zonen-Trenner** zwischen verschiedenen Zonen.
 - **Schriftfarben pro Kategorie:** Instanzen Blau, Raids Lila, Tiefen Grün, Städte Rosa, Sonstiges Grau.
-- **Änderungs-Striche:** Bei Änderungen in Instanz/Raid/Tiefe optional **grüne Striche** (mehr Spieler) bzw. **rote Striche** (weniger Spieler), pro Änderung ein Strich, rechts angehängt, nach jedem 5. Strich ein Abstand; Anzeige-Dauer in den Optionen einstellbar (1–60 s).
+- **Änderungs-Striche:** Bei Änderungen in Instanz/Raid/Tiefe optional **grüne Striche** (mehr Spieler) bzw. **rote Striche** (weniger Spieler), pro Änderung ein Strich, rechts angehängt, nach jedem 5. Strich ein Abstand; Anzeige-Dauer in den Optionen einstellbar (1–60 s). Die Kategoriezeile (Instanz/Raid/Tiefe) **bleibt sichtbar**, bis alle Striche abgelaufen sind.
 - **Online-Hinweis:** Wenn mehr Gildenmitglieder online kommen: **blinkender oberer Balken** + **Countdown-Balken unten** (Dauer in Optionen, 1–60 s), optional Sound.
+- **Detail-Liste:** Wird bei **Roster-Update** aktualisiert (Count und Liste bleiben konsistent). Spieler in den **ersten 5 Minuten** in Instanz/Raid/Tiefe **blinken** leicht.
 
 Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON_VERSION`).
 
@@ -43,7 +44,7 @@ Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON
 
 ## Optionen (Interface → AddOns → Gilden Zonenübersicht)
 
-- **Allgemein:** Fenster-Hintergrund (Farbe + Transparenz), Klassenfarbe, Pulsierung wenn inaktiv, **Fenster auch in Gruppe anzeigen**.
+- **Allgemein:** **Fenster-Design** (Minimal/Talente/Berufe), Pulsierung wenn inaktiv, **Fenster auch in Gruppe anzeigen**.
 - **Animation & Benachrichtigung:** Dauer (1–60 s) für Online-Blink und Countdown-Balken, Animationsfarbe, Klassenfarbe, Sound bei „jemand online“, Button „Online-Anzeige testen“.
 - **Veränderungen tracken:** **Strich-Anzeige Dauer** (1–60 s), Checkboxen für Instanzen/Raids/Tiefen, Test-Buttons zum Simulieren (ein grüner bzw. roter Strich).
 
@@ -51,7 +52,8 @@ Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON
 
 ## Design
 
-- Halbtransparenter Hintergrund, **farbige Kategoriezeilen** (Blau, Lila, Grün, Rosa, Grau) mit vertikalem Verlauf und Hover-Aufhellung.
+- **Blizzard Backdrop** (Tooltip-/Dialog-Stil) mit abgerundeten Ecken; **drei UI-Designs** wählbar in den Optionen: **Minimal** (Standard), **Talente**, **Berufe**.
+- **Farbige Kategoriezeilen** (Blau, Lila, Grün, Rosa, Grau) mit vertikalem Verlauf und Hover-Aufhellung.
 - Oben schmaler Rahmen; bei Online-Benachrichtigung **blinkender Balken** + **Countdown-Balken** unten.
 - Schrift: Arial Narrow (`ARIALN.TTF`).
 
