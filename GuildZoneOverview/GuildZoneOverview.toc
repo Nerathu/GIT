@@ -10,7 +10,7 @@
 ## Notes: Zeigt an, wie viele Gildenmitglieder in Instanzen, Raids und Städten sind (nur sichtbar, wenn du in keiner Gruppe bist).
 ## Author: roman + Cursor
 ## Version: 1.1.2
-## IconTexture: Interface\\Icons\\achievement_zone_silvermooncity
+## IconTexture: Interface\Icons\inv_misc_grouplooking
 ## SavedVariables: GuildZoneOverviewDB
 
 GuildZoneOverview.lua
