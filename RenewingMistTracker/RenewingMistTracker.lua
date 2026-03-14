@@ -1,18 +1,18 @@
-local addonName, addonTable = ...
+local addonName = ...
 
--- Constants
-local RENEWING_MIST_AURA_ID = 119611
+-- Constants (SpellID 119611 = Renewing Mist HoT)
+local RENEWING_MIST_SPELL_NAME = "Erneuernder Nebel"
 local GLOW_THRESHOLD_M_PLUS = 5  -- Leuchten in M+ ab 5 Nebeln
 local GLOW_THRESHOLD_RAID = 12   -- Leuchten im Raid ab 12 Nebeln
 
 -- State
 local db
-local currentCount = 0
+local updatePending
 
 --======================================================================
 -- UI Setup (Clean & Classic)
 --======================================================================
-local frame = CreateFrame("Frame", "RenewingMistTrackerFrame", UIParent, "BackdropTemplate")
+local frame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
 frame:SetSize(50, 50) -- Quadratisch für den klassischen Look
 frame:SetPoint("CENTER", UIParent, "CENTER", 0, -150)
 frame:SetMovable(true)
@@ -56,7 +56,9 @@ local MISTWEAVER_SPEC_ID = 270
 
 local function IsMistweaver()
     if select(2, UnitClass("player")) ~= "MONK" then return false end
-    local specID = GetSpecialization and GetSpecialization() and select(1, GetSpecializationInfo(GetSpecialization()))
+    local specIndex = GetSpecialization()
+    if not specIndex then return false end
+    local specID = select(1, GetSpecializationInfo(specIndex))
     return specID == MISTWEAVER_SPEC_ID
 end
 
@@ -67,14 +69,14 @@ local function GetActiveRemCount()
     local numMembers = IsInRaid() and GetNumGroupMembers() or GetNumSubgroupMembers()
     
     -- Check Player
-    local playerAura = C_UnitAuras.GetAuraDataBySpellName("player", "Erneuernder Nebel", "HELPFUL")
+    local playerAura = C_UnitAuras.GetAuraDataBySpellName("player", RENEWING_MIST_SPELL_NAME, "HELPFUL")
     if playerAura and playerAura.sourceUnit == "player" then count = count + 1 end
-    
+
     -- Check Group
     for i = 1, numMembers do
         local unit = units .. i
         if not UnitIsUnit(unit, "player") then
-            local aura = C_UnitAuras.GetAuraDataBySpellName(unit, "Erneuernder Nebel", "HELPFUL")
+            local aura = C_UnitAuras.GetAuraDataBySpellName(unit, RENEWING_MIST_SPELL_NAME, "HELPFUL")
             if aura and aura.sourceUnit == "player" then
                 count = count + 1
             end
@@ -106,7 +108,6 @@ local function UpdateUI()
 
     local count = GetActiveRemCount()
     local max = GetMaxRemTargets()
-    currentCount = count
     if max and max > 0 then
         text:SetText(count .. "/" .. max)
     else
@@ -138,10 +139,12 @@ end
 --======================================================================
 
 frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
-frame:SetScript("OnDragStop", function(self) 
-    self:StopMovingOrSizing() 
-    local p, _, rp, x, y = self:GetPoint()
-    db.pos = {p, rp, x, y}
+frame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    if db then
+        local p, _, rp, x, y = self:GetPoint()
+        db.pos = { p, rp, x, y }
+    end
 end)
 
 local function ApplyFrameLock()
@@ -153,6 +156,15 @@ local function ApplyFrameLock()
     else
         frame:RegisterForDrag("LeftButton")
     end
+end
+
+local function ScheduleUpdate()
+    if updatePending then return end
+    updatePending = true
+    C_Timer.After(0.05, function()
+        updatePending = nil
+        UpdateUI()
+    end)
 end
 
 frame:SetScript("OnEvent", function(self, event, arg1)
@@ -211,7 +223,11 @@ frame:SetScript("OnEvent", function(self, event, arg1)
             Settings.RegisterAddOnCategory(category)
         end
     end
-    UpdateUI()
+    if event == "UNIT_AURA" then
+        ScheduleUpdate()
+    else
+        UpdateUI()
+    end
 end)
 
 frame:RegisterEvent("ADDON_LOADED")

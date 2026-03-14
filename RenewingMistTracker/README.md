@@ -1,73 +1,46 @@
 # Renewing Mist Tracker
 
-Ein schlankes WoW-Addon für Mistweaver-Mönche (Patch 12.0.x), das live anzeigt, wie viele Gruppen-/Raidmitglieder aktuell deinen **Renewing Mist** (HoT, SpellID 119611) aktiv haben.
+Ein schlankes WoW-Addon für **Mistweaver-Mönche** (Retail, Patch 12.0.x), das live anzeigt, wie viele Gruppen-/Raidmitglieder deinen **Renewing Mist**-HoT (SpellID 119611) aktiv haben.
+
+---
 
 ## Features
 
-- **Live-Zähler**: Zeigt `X/Y`, wobei:
-  - `X` = Anzahl der Einheiten mit deinem aktiven Renewing Mist
-  - `Y` = maximale mögliche Anzahl (Gruppen-/Raidgröße)
-- **Grafisches Icon**: Verwendet das Renewing-Mist-Symbol als Hintergrund.
-- **Visuelles Feedback**:
-  - Dynamische Textfarbe:
-    - `0` ReMs → Rot (kritisch)
-    - `1–2` ReMs → Gelb/Orange (aufbauen)
-    - `>=3` ReMs → Grün (gut abgedeckt)
-  - Schwarzer Pixelrahmen + farbiger Innenrahmen je nach Auslastung (0 %, ≥ 50 %, 100 %).
-- **Frei verschiebbar**:
-  - Frame mit linker Maustaste ziehen, Position wird dauerhaft gespeichert.
-- **Option: nur im Kampf anzeigen**:
-  - Optional kannst du wählen, ob der Tracker **nur im Kampf** oder **immer** sichtbar sein soll.
-- **Optionen im Interface-Menü**:
-  - Unter `Interface -> AddOns -> Renewing Mist Tracker`:
-    - Rahmenfarbe bei **0 %**, **≥ 50 %**, **100 %** über Color-Picker anpassbar.
-- **Debug-Modus** (optional):
-  - Schreibt zusätzliche Infos in den Chat, um Zählung und Gruppenerkennung zu prüfen.
+- **Live-Zähler** `X/Y`: Anzahl aktiver ReMs (`X`) und maximale Ziele (`Y`) je nach Gruppe/Raid.
+- **Icon**: Renewing-Mist-Symbol, schwarzer Rahmen, verschiebbar (Position wird gespeichert).
+- **Textfarben**:
+  - 0 ReMs → Rot  
+  - 1–2 ReMs → Gelb/Orange  
+  - ≥3 ReMs → Grün  
+- **Leuchtrahmen**: Türkiser Rahmen bei Maximum oder ab Schwellenwert (M+ bzw. Raid getrennt einstellbar).
+- **Nur Mistweaver**: Das Fenster erscheint nur in der Mistweaver-Spezialisierung; als Brewmaster oder Windwalker bleibt es ausgeblendet.
+- **Optionen** (Interface → AddOns → RenewingMistTracker):
+  - Rahmen sperren (nicht verschiebbar)
+  - Leuchten nur bei Maximum (alle haben Buff)
+  - Nicht im Kampf anzeigen
+  - Nicht in Instanzen anzeigen
+
+---
 
 ## Installation
 
-1. Kopiere den Ordner `RenewingMistTracker` in:
-   - `.../_retail_/Interface/AddOns/`
-2. Stelle sicher, dass die `RenewingMistTracker.toc` geladen ist (Addon-Liste im Charakterauswahlbildschirm).
+1. Ordner `RenewingMistTracker` nach  
+   `World of Warcraft/_retail_/Interface/AddOns/` kopieren.
+2. Addon im Charakterauswahlbildschirm aktivieren (nur für Mönche sichtbar via X-Class: MONK).
+3. Ingame: Fenster nur sichtbar als **Mistweaver**; Position durch Ziehen anpassen.
 
-## Slash-Commands
+---
 
-- ` /rem help`  
-  Zeigt eine kurze Übersicht und die aktuelle Addon-Version.
+## Technik
 
-- ` /rem debug`  
-  Zeigt den aktuellen Debug-Status (aktiv / inaktiv).
+- **Aura-Erkennung**: `C_UnitAuras.GetAuraDataBySpellName` (Spellname „Erneuernder Nebel“, HELPFUL) für Spieler und Gruppen-/Raid-Einheiten.
+- **Spec-Prüfung**: Nur bei Spezialisierung Mistweaver (specID 270) wird das Fenster angezeigt; bei Spec-Wechsel sofortige Anpassung.
+- **Events**: `ADDON_LOADED`, `PLAYER_ENTERING_WORLD`, `GROUP_ROSTER_UPDATE`, `UNIT_AURA` (gedrosselt), `PLAYER_REGEN_*`, `ZONE_CHANGED_NEW_AREA`, `PLAYER_SPECIALIZATION_CHANGED`.
+- **SavedVariables**: `RenewingMistTrackerDB` (Position, Optionen).
 
-- ` /rem debug on`  
-  Aktiviert Debug-Ausgaben im Chat.
-
-- ` /rem debug off`  
-  Deaktiviert Debug-Ausgaben.
-
-- ` /rem combat on`  
-  Tracker wird **nur im Kampf** angezeigt.
-
-- ` /rem combat off`  
-  Tracker wird **immer** angezeigt (Standard).
-
-- ` /rmt`  
-  Gibt eine Statuszeile im Chat aus, z.B.  
-  `"[RMT] v0.0.7 ReM: 4/6, Debug: true"`.
-
-## Funktionsweise (Technik)
-
-- Das Addon lauscht auf:
-  - `UNIT_AURA`
-  - `GROUP_ROSTER_UPDATE`
-  - `PLAYER_ENTERING_WORLD`
-  - `PLAYER_SPECIALIZATION_CHANGED`, `ACTIVE_TALENT_GROUP_CHANGED`
-  - `PLAYER_REGEN_DISABLED`, `PLAYER_REGEN_ENABLED` (Kampfstatus)
-- Für jede relevante Einheit (`player`, `partyX`, `raidX`) wird versucht, Renewing Mist über die moderne Aura-API zu erkennen.
-- Die Anzeige wird über einen kurzen Timer (`C_Timer.After`) gedrosselt, um Event-Spam zu glätten.
+---
 
 ## Bekannte Einschränkungen
 
-- Die Aura-APIs in 12.0.x unterliegen Blizzards Private-/Secret-Aura-Regeln. Bei zukünftigen API-Änderungen kann eine Anpassung nötig werden.
-- Der Tracker ist auf **Renewing Mist (HoT)** ausgelegt.
-- Auf **nicht-Monk-Chars** blendet das Addon das Frame aus (sofern die Spec-Prüfung aktiv ist).
-
+- Aura-APIs unterliegen Blizzards Regeln zu privaten/geheimen Auren; bei API-Änderungen kann eine Anpassung nötig werden.
+- Spellname ist deutsch („Erneuernder Nebel“); bei anderen Lokalen müsste der Name angepasst werden.
