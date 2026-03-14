@@ -9,7 +9,7 @@
 
     Optionen (Interface → AddOns → Gilden Zonenübersicht):
     - Allgemein: Fenster-Hintergrund, Klassenfarbe, Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen (z. B. Tiefen).
-    - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen".
+    - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen". Bei der Online-Benachrichtigung blinkt der obere Balken; ein Countdown-Balken unten zeigt die verbleibende Dauer an.
     - Veränderungen tracken: Strich-Anzeige Dauer (Sekunden), Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen der Strich-Anzeige.
 
     SavedVariables: GuildZoneOverviewDB
@@ -84,6 +84,16 @@ local prevOnlineCount = nil
 -- State tracking für Floating Numbers
 local prevCategoryCounts = { instance = 0, raid = 0, delve = 0, city = 0, other = 0 }
 local isInitialLoad = true
+local isTestingFloating = false
+
+-- Dauer-Tracking: wie lange Spieler bereits in der aktuellen Zone sind (nur instance, raid, delve, city)
+local prevPlayerZones = {}      -- name -> zone
+local playerZoneFirstSeen = {}  -- name -> GetTime() beim Eintritt in Zone
+local DURATION_BUCKETS = {
+    { maxMin = 10,  color = { 0.4, 0.85, 0.4 } },   -- 1–10 min: Grün
+    { maxMin = 40,  color = { 0.95, 0.65, 0.35 } }, -- 10–40 min: Orange
+    { maxMin = 1e9, color = { 0.9, 0.35, 0.35 } }, -- >40 min: Rot
+}
 -- Y unter der letzten sichtbaren Kategoriezeile (für Test-Floating: Zeile darunter anzeigen)
 local layoutBottomY = -26
 
@@ -96,6 +106,14 @@ local function ClassifyZone(zoneName)
     elseif DUNGEON_ZONES[zoneName] then return "instance"
     elseif DELVE_ZONES[zoneName] then return "delve"
     else return "other" end
+end
+
+local function GetDurationColor(minutes)
+    if not minutes or minutes < 0 then return nil end
+    for _, b in ipairs(DURATION_BUCKETS) do
+        if minutes <= b.maxMin then return b.color end
+    end
+    return DURATION_BUCKETS[#DURATION_BUCKETS].color
 end
 
 local frame = CreateFrame("Frame", "GuildZoneOverviewFrame", UIParent)
@@ -153,6 +171,21 @@ topBorder:ClearAllPoints()
 topBorder:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
 topBorder:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
 
+local COUNTDOWN_BAR_HEIGHT = 4
+local countdownBar = CreateFrame("Frame", nil, frame)
+countdownBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+countdownBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+countdownBar:SetHeight(COUNTDOWN_BAR_HEIGHT)
+local countdownBarBg = countdownBar:CreateTexture(nil, "BACKGROUND")
+countdownBarBg:SetAllPoints()
+countdownBarBg:SetColorTexture(0.1, 0.1, 0.15, 0.7)
+local countdownBarFill = countdownBar:CreateTexture(nil, "ARTWORK")
+countdownBarFill:SetPoint("LEFT", countdownBar, "LEFT", 0, 0)
+countdownBarFill:SetPoint("BOTTOM", countdownBar, "BOTTOM", 0, 0)
+countdownBarFill:SetPoint("TOP", countdownBar, "TOP", 0, 0)
+countdownBarFill:SetWidth(0)
+countdownBarFill:Hide()
+
 local animationTimer = nil
 local isAnimatingAlert = false
 
@@ -183,6 +216,12 @@ local function PlayOnlineBlink()
     duration = math.max(1, math.min(60, duration))
     local startTime = GetTime()
     
+    if countdownBarFill then
+        countdownBarFill:SetColorTexture(r, g, b, 1)
+        countdownBarFill:SetWidth(countdownBar and countdownBar:GetWidth() or 0)
+        countdownBarFill:Show()
+    end
+    
     isAnimatingAlert = true
     RefreshAlpha() 
     
@@ -197,8 +236,15 @@ local function PlayOnlineBlink()
             topBorder:SetHeight(2)
             topBorder:SetColorTexture(0, 0.8, 1, 1)
             topBorder:SetAlpha(1)
+            if countdownBarFill then countdownBarFill:Hide() end
             RefreshAlpha()
             return
+        end
+        
+        local remaining = 1 - (elapsed / duration)
+        if countdownBar and countdownBarFill then
+            local w = countdownBar:GetWidth() * remaining
+            countdownBarFill:SetWidth(w >= 0.01 and w or 0)
         end
         
         local pulseAlpha = 0.3 + 0.7 * math.abs(math.sin(elapsed * math.pi * 1.5))
@@ -218,7 +264,17 @@ title:SetFontObject(headerFont)
 title:SetText("GILDENÜBERSICHT")
 title:SetTextColor(0.9, 0.9, 0.9)
 
-local function CreateRow(yOffset, hue, label)
+-- Schriftfarben pro Kategorie (angenehme, nicht grelle Töne)
+local CATEGORY_TEXT_COLORS = {
+    instance = { 0.45, 0.65, 0.92 },   -- Blau
+    raid     = { 0.72, 0.58, 0.92 },   -- Lila
+    delve    = { 0.45, 0.68, 0.52 },   -- Sanftes Grün
+    city     = { 0.92, 0.72, 0.82 },   -- Rosa
+    other    = { 0.52, 0.52, 0.56 },   -- Angenehmes Grau (wie zuvor Tiefen)
+}
+
+local function CreateRow(yOffset, hue, label, textColorR, textColorG, textColorB)
+    local tr, tg, tb = textColorR or 0.8, textColorG or 0.8, textColorB or 0.8
     local btn = CreateFrame("Button", nil, frame)
     btn:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, yOffset)
     btn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, yOffset)
@@ -239,30 +295,33 @@ local function CreateRow(yOffset, hue, label)
     text:SetPoint("LEFT", btn, "LEFT", 10, 0)
     text:SetPoint("RIGHT", btn, "RIGHT", -10, 0)
     text:SetText(label .. ": 0")
-    text:SetTextColor(0.8, 0.8, 0.8)
+    text:SetTextColor(tr, tg, tb)
     text:SetJustifyH("LEFT")
     text:SetWordWrap(false)
     text:SetMaxLines(1)
 
+    local hoverR = math.min(1, tr * 0.5 + 0.5)
+    local hoverG = math.min(1, tg * 0.5 + 0.5)
+    local hoverB = math.min(1, tb * 0.5 + 0.5)
     btn:SetScript("OnEnter", function()
         bar:SetColorTexture(hoverColor:GetRGBA())
-        text:SetTextColor(1, 1, 1)
+        text:SetTextColor(hoverR, hoverG, hoverB)
         if RefreshAlpha then RefreshAlpha() end
     end)
     btn:SetScript("OnLeave", function()
         bar:SetGradient("VERTICAL", bottomColor, topColor)
-        text:SetTextColor(0.8, 0.8, 0.8)
+        text:SetTextColor(tr, tg, tb)
         if RefreshAlpha then RefreshAlpha() end
     end)
 
     return btn, text
 end
 
-local btnInst, instancesText = CreateRow(-26, "cyan", "Instanzen")
-local btnRaid, raidsText = CreateRow(-44, "violet", "Raids")
-local btnDelve, delvesText = CreateRow(-62, "cyan", "Tiefen")
-local btnCity, citiesText = CreateRow(-80, "violet", "Städte")
-local btnOther, otherText = CreateRow(-98, "cyan", "Sonstiges")
+local btnInst, instancesText = CreateRow(-26, "cyan", "Instanzen", CATEGORY_TEXT_COLORS.instance[1], CATEGORY_TEXT_COLORS.instance[2], CATEGORY_TEXT_COLORS.instance[3])
+local btnRaid, raidsText = CreateRow(-44, "violet", "Raids", CATEGORY_TEXT_COLORS.raid[1], CATEGORY_TEXT_COLORS.raid[2], CATEGORY_TEXT_COLORS.raid[3])
+local btnDelve, delvesText = CreateRow(-62, "cyan", "Tiefen", CATEGORY_TEXT_COLORS.delve[1], CATEGORY_TEXT_COLORS.delve[2], CATEGORY_TEXT_COLORS.delve[3])
+local btnCity, citiesText = CreateRow(-80, "violet", "Städte", CATEGORY_TEXT_COLORS.city[1], CATEGORY_TEXT_COLORS.city[2], CATEGORY_TEXT_COLORS.city[3])
+local btnOther, otherText = CreateRow(-98, "cyan", "Sonstiges", CATEGORY_TEXT_COLORS.other[1], CATEGORY_TEXT_COLORS.other[2], CATEGORY_TEXT_COLORS.other[3])
 
 local categoryRows = {
     instance = { btn = btnInst,  text = instancesText },
@@ -414,10 +473,15 @@ frame:HookScript("OnLeave", RefreshAlpha)
 detailsFrame:SetScript("OnEnter", RefreshAlpha)
 detailsFrame:SetScript("OnLeave", RefreshAlpha)
 
+local DETAIL_INDICATOR_SIZE = 8
+local DETAIL_INDICATOR_GAP = 4
 local detailLines = {}
 
 local function ClearDetailLines()
-    for _, fs in ipairs(detailLines) do fs:SetText(""); fs:Hide() end
+    for _, entry in ipairs(detailLines) do
+        if entry.fs then entry.fs:SetText(""); entry.fs:Hide() end
+        if entry.tex then entry.tex:Hide() end
+    end
 end
 
 local function ShowDetails(categoryKey)
@@ -439,17 +503,32 @@ local function ShowDetails(categoryKey)
 
     local yOffset = -10
     local index = 1
+    local leftWithIndicator = 10 + DETAIL_INDICATOR_SIZE + DETAIL_INDICATOR_GAP
 
     if members and #members > 0 then
         for _, info in ipairs(members) do
-            local fs = detailLines[index]
-            if not fs then
-                fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont")
-                detailLines[index] = fs
+            local entry = detailLines[index]
+            if not entry then
+                entry = {}
+                entry.tex = detailsFrame:CreateTexture(nil, "OVERLAY")
+                entry.tex:SetSize(DETAIL_INDICATOR_SIZE, DETAIL_INDICATOR_SIZE)
+                entry.tex:SetColorTexture(0.5, 0.5, 0.5, 1)
+                entry.fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont")
+                detailLines[index] = entry
+            end
+            local fs, tex = entry.fs, entry.tex
+
+            tex:ClearAllPoints()
+            tex:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset - 4)
+            if info.durationColor then
+                tex:SetColorTexture(info.durationColor[1], info.durationColor[2], info.durationColor[3], 1)
+                tex:Show()
+            else
+                tex:Hide()
             end
 
             fs:ClearAllPoints()
-            fs:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset)
+            fs:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", leftWithIndicator, yOffset)
             fs:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", -10, yOffset)
 
             local r, g, b = 1, 1, 1
@@ -469,11 +548,16 @@ local function ShowDetails(categoryKey)
             index = index + 1
         end
     else
-        local fs = detailLines[1]
-        if not fs then
-            fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont")
-            detailLines[1] = fs
+        local entry = detailLines[1]
+        if not entry then
+            entry = {}
+            entry.tex = detailsFrame:CreateTexture(nil, "OVERLAY")
+            entry.tex:SetSize(DETAIL_INDICATOR_SIZE, DETAIL_INDICATOR_SIZE)
+            entry.fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont")
+            detailLines[1] = entry
         end
+        if entry.tex then entry.tex:Hide() end
+        local fs = entry.fs
         fs:ClearAllPoints()
         fs:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset)
         fs:SetText("Keine Spieler online")
@@ -530,9 +614,32 @@ end
 
 local function UpdateGuildZoneCounts()
     if not IsInGuild() then return end
+    if isTestingFloating then return end
 
     for _, tbl in pairs(membersByCategory) do table.wipe(tbl) end
     local counts = { instance = 0, raid = 0, delve = 0, city = 0, other = 0 }
+
+    -- Aktuelle Online-Spieler (name -> zone) für Dauer-Tracking
+    local currentPlayers = {}
+    for i = 1, GetNumGuildMembers() do
+        local name, _, _, _, _, zone, _, _, isOnline = GetGuildRosterInfo(i)
+        if isOnline and name then
+            currentPlayers[name] = zone or "Unbekannte Zone"
+        end
+    end
+    local now = GetTime()
+    for name, zone in pairs(currentPlayers) do
+        if prevPlayerZones[name] ~= zone then
+            playerZoneFirstSeen[name] = now
+        end
+        prevPlayerZones[name] = zone
+    end
+    for name in pairs(prevPlayerZones) do
+        if not currentPlayers[name] then
+            prevPlayerZones[name] = nil
+            playerZoneFirstSeen[name] = nil
+        end
+    end
 
     local minWidth = 180
     local maxContentWidth = minWidth
@@ -553,8 +660,9 @@ local function UpdateGuildZoneCounts()
             
             counts[category] = counts[category] + 1
             local displayText = string.format("%s - %s", name, zone)
-            
-            table.insert(membersByCategory[category], { name = name, class = class, zone = zone, displayText = displayText })
+            local durationMin = playerZoneFirstSeen[name] and (now - playerZoneFirstSeen[name]) / 60 or 0
+            local durationColor = (category ~= "other") and GetDurationColor(durationMin) or nil
+            table.insert(membersByCategory[category], { name = name, class = class, zone = zone, displayText = displayText, durationColor = durationColor })
 
             measureFS:SetText(displayText)
             local totalLineWidth = measureFS:GetStringWidth() or 0
@@ -619,6 +727,9 @@ local function UpdateGuildZoneCounts()
     isInitialLoad = false
 end
 
+local GUILD_ROSTER_DEBOUNCE_SEC = 0.75
+local guildRosterDebounceTimer = nil
+
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
@@ -643,7 +754,13 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         if event == "PLAYER_GUILD_UPDATE" then C_GuildInfo.GuildRoster() end
         UpdateVisibility()
     elseif event == "GUILD_ROSTER_UPDATE" then
-        UpdateGuildZoneCounts()
+        if guildRosterDebounceTimer and guildRosterDebounceTimer.Cancel then
+            guildRosterDebounceTimer:Cancel()
+        end
+        guildRosterDebounceTimer = C_Timer.After(GUILD_ROSTER_DEBOUNCE_SEC, function()
+            guildRosterDebounceTimer = nil
+            UpdateGuildZoneCounts()
+        end)
     end
 end)
 
@@ -681,74 +798,90 @@ do
         end
     end
 
+    local function makeCheckBox(parent, y, id, label, dbKey, onChecked)
+        local cb = CreateFrame("CheckButton", id, parent, "InterfaceOptionsCheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, y)
+        if _G[cb:GetName().."Text"] then _G[cb:GetName().."Text"]:SetText(label) end
+        cb:SetScript("OnClick", function(self)
+            GuildZoneOverviewDB[dbKey] = self:GetChecked()
+            if onChecked then onChecked(self) end
+        end)
+        return cb
+    end
+
+    local function makeColorPickerRow(parent, y, label, dbKey, hasOpacity, classColorDbKey, classCheckId, getColor, onApply, updateSwatch)
+        local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lbl:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, y)
+        lbl:SetText(label)
+        local btn = CreateFrame("Button", nil, parent)
+        btn:SetSize(24, 24)
+        btn:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, y - 20)
+        local tex = btn:CreateTexture(nil, "BACKGROUND")
+        tex:SetAllPoints()
+        local classCheck = CreateFrame("CheckButton", classCheckId, parent, "InterfaceOptionsCheckButtonTemplate")
+        classCheck:SetPoint("LEFT", btn, "RIGHT", 8, 0)
+        if classCheckId and _G[classCheckId.."Text"] then _G[classCheckId.."Text"]:SetText("Klassenfarbe") end
+        classCheck:SetScript("OnClick", function(self)
+            GuildZoneOverviewDB[classColorDbKey] = self:GetChecked()
+            updateSwatch(tex)
+        end)
+        btn:SetScript("OnClick", function()
+            local r, g, b, a = getColor()
+            OpenColorPicker(r, g, b, a, hasOpacity, function()
+                local r2, g2, b2 = ColorPickerFrame:GetColorRGB()
+                local a2 = hasOpacity and (ColorPickerFrame.GetColorAlpha and ColorPickerFrame:GetColorAlpha() or (OpacitySliderFrame and OpacitySliderFrame.GetValue and OpacitySliderFrame:GetValue() or 1)) or 1
+                onApply(r2, g2, b2, a2)
+                updateSwatch(tex)
+            end, function()
+                local p = ColorPickerFrame.previousValues
+                if p then
+                    local r2 = p.r or p[1]
+                    local g2 = p.g or p[2]
+                    local b2 = p.b or p[3]
+                    local a2 = p.a or p[4] or 1
+                    if r2 and g2 and b2 then onApply(r2, g2, b2, a2) end
+                end
+                updateSwatch(tex)
+            end)
+        end)
+        return { tex = tex, classCheck = classCheck, updateSwatch = updateSwatch }
+    end
+
     local genTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     genTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -16)
     genTitle:SetText("Allgemein")
 
-    local bgColorLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    bgColorLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -44)
-    bgColorLabel:SetText("Fenster-Hintergrund")
-
-    local bgColorBtn = CreateFrame("Button", nil, panel)
-    bgColorBtn:SetSize(24, 24)
-    bgColorBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -64)
-    local bgColorTex = bgColorBtn:CreateTexture(nil, "BACKGROUND")
-    bgColorTex:SetAllPoints()
-    
-    local bgClassColorCheck = CreateFrame("CheckButton", "GZOBgClassColorCheck", panel, "InterfaceOptionsCheckButtonTemplate")
-    bgClassColorCheck:SetPoint("LEFT", bgColorBtn, "RIGHT", 8, 0)
-    if _G[bgClassColorCheck:GetName().."Text"] then _G[bgClassColorCheck:GetName().."Text"]:SetText("Klassenfarbe") end
-    bgClassColorCheck:SetScript("OnClick", function(self)
-        GuildZoneOverviewDB.useClassColorBackground = self:GetChecked()
-        ApplyBackgroundColor()
+    local function bgGetColor()
         local c = GuildZoneOverviewDB.backgroundColor or { 0.05, 0.05, 0.08, 0.9 }
         local r, g, b = c[1], c[2], c[3]
         if GuildZoneOverviewDB.useClassColorBackground then
             local cr, cg, cb = GetPlayerClassColor()
             if cr and cg and cb then r, g, b = cr, cg, cb end
         end
-        bgColorTex:SetColorTexture(r, g, b, c[4] or 1)
-    end)
-    bgColorBtn:SetScript("OnClick", function()
+        return r, g, b, c[4] or 1
+    end
+    local function bgUpdateSwatch(tex)
         local c = GuildZoneOverviewDB.backgroundColor or { 0.05, 0.05, 0.08, 0.9 }
-        local a = c[4] or 1
-        OpenColorPicker(c[1], c[2], c[3], a, true, function()
-            local r, g, b = ColorPickerFrame:GetColorRGB()
-            local a2 = 1
-            if ColorPickerFrame.GetColorAlpha then a2 = ColorPickerFrame:GetColorAlpha()
-            elseif OpacitySliderFrame and OpacitySliderFrame.GetValue then a2 = OpacitySliderFrame:GetValue() end
-            GuildZoneOverviewDB.backgroundColor = { r, g, b, a2 }
+        local r, g, b = c[1], c[2], c[3]
+        if GuildZoneOverviewDB.useClassColorBackground then
+            local cr, cg, cb = GetPlayerClassColor()
+            if cr and cg and cb then r, g, b = cr, cg, cb end
+        end
+        tex:SetColorTexture(r, g, b, c[4] or 1)
+        ApplyBackgroundColor()
+    end
+    local bgRow = makeColorPickerRow(panel, -44, "Fenster-Hintergrund", "backgroundColor", true, "useClassColorBackground", "GZOBgClassColorCheck",
+        bgGetColor,
+        function(r, g, b, a)
+            GuildZoneOverviewDB.backgroundColor = { r, g, b, a }
             GuildZoneOverviewDB.useClassColorBackground = false
-            bgClassColorCheck:SetChecked(false)
-            bgColorTex:SetColorTexture(r, g, b, a2)
-            if frameBg then frameBg:SetColorTexture(r, g, b, a2) end
-        end, function()
-            local p = ColorPickerFrame.previousValues
-            if p then
-                local r = p.r or p[1]
-                local g = p.g or p[2]
-                local b = p.b or p[3]
-                local a2 = p.a or p[4] or 1
-                if r and g and b then GuildZoneOverviewDB.backgroundColor = { r, g, b, a2 } end
-            end
-            local bc = GuildZoneOverviewDB.backgroundColor or { 0.05, 0.05, 0.08, 0.9 }
-            bgColorTex:SetColorTexture(bc[1], bc[2], bc[3], bc[4] or 1)
-            if frameBg then frameBg:SetColorTexture(bc[1], bc[2], bc[3], bc[4] or 1) end
-        end)
-    end)
-
-    local pulseCheck = CreateFrame("CheckButton", "GZOPulseWhenInactive", panel, "InterfaceOptionsCheckButtonTemplate")
-    pulseCheck:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -90)
-    if _G[pulseCheck:GetName().."Text"] then _G[pulseCheck:GetName().."Text"]:SetText("Dezente Pulsierung wenn inaktiv") end
-    pulseCheck:SetScript("OnClick", function(self)
-        GuildZoneOverviewDB.pulseWhenInactive = self:GetChecked()
-    end)
-
-    local showInGroupCheck = CreateFrame("CheckButton", "GZOShowInGroupCheck", panel, "InterfaceOptionsCheckButtonTemplate")
-    showInGroupCheck:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -112)
-    if _G[showInGroupCheck:GetName().."Text"] then _G[showInGroupCheck:GetName().."Text"]:SetText("Fenster auch in Gruppe anzeigen (z. B. in Tiefen)") end
-    showInGroupCheck:SetScript("OnClick", function(self)
-        GuildZoneOverviewDB.showFrameInGroup = self:GetChecked()
+            bgRow.classCheck:SetChecked(false)
+            if frameBg then frameBg:SetColorTexture(r, g, b, a) end
+        end,
+        bgUpdateSwatch
+    )
+    local pulseCheck = makeCheckBox(panel, -90, "GZOPulseWhenInactive", "Dezente Pulsierung wenn inaktiv", "pulseWhenInactive")
+    local showInGroupCheck = makeCheckBox(panel, -112, "GZOShowInGroupCheck", "Fenster auch in Gruppe anzeigen (z. B. in Tiefen)", "showFrameInGroup", function()
         UpdateVisibility()
     end)
 
@@ -781,58 +914,35 @@ do
         durationValueText:SetText(tostring(value))
     end)
 
-    local animColorLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    animColorLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -232)
-    animColorLabel:SetText("Animationsfarbe")
-
-    local animColorBtn = CreateFrame("Button", nil, panel)
-    animColorBtn:SetSize(24, 24)
-    animColorBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -250)
-    local animColorTex = animColorBtn:CreateTexture(nil, "BACKGROUND")
-    animColorTex:SetAllPoints()
-    
-    local animClassColorCheck = CreateFrame("CheckButton", "GZOAnimClassColorCheck", panel, "InterfaceOptionsCheckButtonTemplate")
-    animClassColorCheck:SetPoint("LEFT", animColorBtn, "RIGHT", 8, 0)
-    if _G[animClassColorCheck:GetName().."Text"] then _G[animClassColorCheck:GetName().."Text"]:SetText("Klassenfarbe") end
-    animClassColorCheck:SetScript("OnClick", function(self)
-        GuildZoneOverviewDB.useClassColorAnimation = self:GetChecked()
-        local r, g, b = 1, 1, 1
+    local function animGetColor()
+        local c = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
+        local r, g, b = c[1], c[2], c[3]
         if GuildZoneOverviewDB.useClassColorAnimation then
             local cr, cg, cb = GetPlayerClassColor()
             if cr and cg and cb then r, g, b = cr, cg, cb end
-        else
-            local c = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
-            r, g, b = c[1], c[2], c[3]
         end
-        animColorTex:SetColorTexture(r, g, b, 1)
-    end)
-    animColorBtn:SetScript("OnClick", function()
+        return r, g, b, 1
+    end
+    local function animUpdateSwatch(tex)
         local c = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
-        OpenColorPicker(c[1], c[2], c[3], 1, false, function()
-            local r, g, b = ColorPickerFrame:GetColorRGB()
+        local r, g, b = c[1], c[2], c[3]
+        if GuildZoneOverviewDB.useClassColorAnimation then
+            local cr, cg, cb = GetPlayerClassColor()
+            if cr and cg and cb then r, g, b = cr, cg, cb end
+        end
+        tex:SetColorTexture(r, g, b, 1)
+    end
+    local animRow = makeColorPickerRow(panel, -232, "Animationsfarbe", "animationColor", false, "useClassColorAnimation", "GZOAnimClassColorCheck",
+        animGetColor,
+        function(r, g, b)
             GuildZoneOverviewDB.animationColor = { r, g, b }
             GuildZoneOverviewDB.useClassColorAnimation = false
-            animClassColorCheck:SetChecked(false)
-            animColorTex:SetColorTexture(r, g, b, 1)
-        end, function()
-            local p = ColorPickerFrame.previousValues
-            if p then
-                local r = p.r or p[1]
-                local g = p.g or p[2]
-                local b = p.b or p[3]
-                if r and g and b then GuildZoneOverviewDB.animationColor = { r, g, b } end
-            end
-            local rec = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
-            animColorTex:SetColorTexture(rec[1], rec[2], rec[3], 1)
-        end)
-    end)
+            animRow.classCheck:SetChecked(false)
+        end,
+        animUpdateSwatch
+    )
 
-    local soundCheck = CreateFrame("CheckButton", "GZOSoundCheck", panel, "InterfaceOptionsCheckButtonTemplate")
-    soundCheck:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -278)
-    if _G[soundCheck:GetName().."Text"] then _G[soundCheck:GetName().."Text"]:SetText("Sound abspielen ('Bnet Toast'), wenn jemand online kommt") end
-    soundCheck:SetScript("OnClick", function(self)
-        GuildZoneOverviewDB.playSoundOnOnline = self:GetChecked()
-    end)
+    local soundCheck = makeCheckBox(panel, -278, "GZOSoundCheck", "Sound abspielen ('Bnet Toast'), wenn jemand online kommt", "playSoundOnOnline")
 
     local testBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     testBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -308)
@@ -886,6 +996,7 @@ do
         local function runFloatingSimulation(diff)
             local row = categoryRows[key]
             if not row then return end
+            isTestingFloating = true
             local wasShown = row.btn:IsShown()
             if not wasShown then
                 local testY = layoutBottomY  -- nächste freie Zeile unter den sichtbaren Kategorien
@@ -895,8 +1006,13 @@ do
                 row.btn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, testY)
             end
             SpawnFloatingDiff(row, diff)
-            if not wasShown and C_Timer then
-                C_Timer.After(1.5, function() UpdateGuildZoneCounts() end)
+            if C_Timer then
+                C_Timer.After(1.5, function()
+                    isTestingFloating = false
+                    if not wasShown then UpdateGuildZoneCounts() end
+                end)
+            else
+                isTestingFloating = false
             end
         end
         local btnPlus = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
@@ -925,30 +1041,17 @@ do
         lineDurationValueText:SetText(tostring(GuildZoneOverviewDB.floatingLineDurationSec or 10))
         skipLineDurationSliderWrite = false
 
-        bgClassColorCheck:SetChecked(GuildZoneOverviewDB.useClassColorBackground)
-        animClassColorCheck:SetChecked(GuildZoneOverviewDB.useClassColorAnimation)
+        bgRow.classCheck:SetChecked(GuildZoneOverviewDB.useClassColorBackground)
+        animRow.classCheck:SetChecked(GuildZoneOverviewDB.useClassColorAnimation)
         pulseCheck:SetChecked(GuildZoneOverviewDB.pulseWhenInactive)
         showInGroupCheck:SetChecked(GuildZoneOverviewDB.showFrameInGroup)
         soundCheck:SetChecked(GuildZoneOverviewDB.playSoundOnOnline)
         trackInstCheck:SetChecked(GuildZoneOverviewDB.trackChangesInstance)
         trackRaidCheck:SetChecked(GuildZoneOverviewDB.trackChangesRaid)
         trackDelveCheck:SetChecked(GuildZoneOverviewDB.trackChangesDelve)
-        
-        local bc = GuildZoneOverviewDB.backgroundColor or { 0.05, 0.05, 0.08, 0.9 }
-        local br, bg, bb = bc[1], bc[2], bc[3]
-        if GuildZoneOverviewDB.useClassColorBackground then
-            local cr, cg, cb = GetPlayerClassColor()
-            if cr and cg and cb then br, bg, bb = cr, cg, cb end
-        end
-        bgColorTex:SetColorTexture(br, bg, bb, bc[4] or 1)
-        
-        local ac = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
-        local ar, ag, ab = ac[1], ac[2], ac[3]
-        if GuildZoneOverviewDB.useClassColorAnimation then
-            local cr, cg, cb = GetPlayerClassColor()
-            if cr and cg and cb then ar, ag, ab = cr, cg, cb end
-        end
-        animColorTex:SetColorTexture(ar, ag, ab, 1)
+
+        bgRow.updateSwatch(bgRow.tex)
+        animRow.updateSwatch(animRow.tex)
     end
 
     panel:SetScript("OnShow", function(self)
