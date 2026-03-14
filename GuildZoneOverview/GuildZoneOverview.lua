@@ -4,17 +4,18 @@
     Zeigt online Gildenmitglieder nach Kategorien (Instanzen, Raids, Tiefen, Städte, Sonstiges).
     Sichtbar je nach Option auch in Gruppe (z. B. in Tiefen). Klick auf eine Kategorie öffnet
     die Detail-Liste (Name - Zone, klassengefärbt). Bei Änderungen in Instanz/Raid/Tiefe erscheinen
-    optional Floating-Zahlen (+1/-1); pro Kategorie ein-/ausschaltbar, mit Test-Buttons +1/-1 zum Simulieren.
+    optional grüne/rote Striche (ein Strich pro Änderung); neue Striche werden rechts angehängt,
+    nach jedem 5. Strich ein Abstand, Anzeige-Dauer in den Optionen einstellbar (Standard 10 s).
 
     Optionen (Interface → AddOns → Gilden Zonenübersicht):
     - Allgemein: Fenster-Hintergrund, Klassenfarbe, Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen (z. B. Tiefen).
     - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen".
-    - Veränderungen tracken: Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen der Floating-Anzeige.
+    - Veränderungen tracken: Strich-Anzeige Dauer (Sekunden), Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen der Strich-Anzeige.
 
     SavedVariables: GuildZoneOverviewDB
     DB-Keys: point, relativePoint, xOfs, yOfs, width, animationDurationSec, animationColor, backgroundColor,
              useClassColorAnimation, useClassColorBackground, pulseWhenInactive, playSoundOnOnline,
-             showFrameInGroup, trackChangesInstance, trackChangesRaid, trackChangesDelve.
+             showFrameInGroup, floatingLineDurationSec, trackChangesInstance, trackChangesRaid, trackChangesDelve.
 ]]
 local addonName = ...
 local ADDON_VERSION = "1.3.0"
@@ -42,6 +43,7 @@ local function ApplyDBDefaults()
     if db.trackChangesInstance == nil then db.trackChangesInstance = true end
     if db.trackChangesRaid == nil then db.trackChangesRaid = true end
     if db.trackChangesDelve == nil then db.trackChangesDelve = true end
+    if db.floatingLineDurationSec == nil then db.floatingLineDurationSec = 10 end
 end
 
 local function GetPlayerClassColor()
@@ -270,47 +272,95 @@ local categoryRows = {
     other    = { btn = btnOther, text = otherText     },
 }
 
--- Erstellt und verwaltet die Animation für die +1 / -1 Zahlen
+--[[ Striche (grün/rot) für Änderungen: ein Strich pro +1/-1, rechts angehängt, nach 5ern Abstand. ]]
+local LINE_WIDTH, LINE_HEIGHT = 3, 12
+local LINE_GAP, LINE_GROUP_GAP = 2, 6   -- Abstand zwischen Strichen; Zusatzabstand nach jedem 5.
+local LINE_OFFSET_RIGHT = 60            -- Abstand des Strich-Containers vom rechten Buttonrand (px)
+local LINE_GREEN = { 0.2, 1, 0.2, 1 }
+local LINE_RED   = { 1, 0.2, 0.2, 1 }
+
+local FLOATING_LINE_KEYS = { "instance", "raid", "delve" }
+
+local function LineGapForIndex(i)
+    return LINE_GAP + ((i % 5 == 1 and i > 1) and LINE_GROUP_GAP or 0)
+end
+
+local function RepositionFloatingLines(row)
+    if not row.floatingLineContainer or not row.floatingLines then return end
+    local prev
+    for i, entry in ipairs(row.floatingLines) do
+        local tex = entry.tex
+        if tex and tex.SetPoint then
+            tex:ClearAllPoints()
+            if not prev then
+                tex:SetPoint("LEFT", row.floatingLineContainer, "LEFT", 0, 0)
+            else
+                tex:SetPoint("LEFT", prev, "RIGHT", LineGapForIndex(i), 0)
+            end
+            prev = tex
+        end
+    end
+end
+
 local function SpawnFloatingDiff(row, diff)
     if diff == 0 then return end
-    
-    if not row.floatAnim then
-        local fs = row.btn:CreateFontString(nil, "OVERLAY", "GZOHeaderFont")
-        
-        local ag = fs:CreateAnimationGroup()
-        local trans = ag:CreateAnimation("Translation")
-        trans:SetOffset(0, 15)
-        trans:SetDuration(1.2)
-        trans:SetSmoothing("OUT")
-        
-        local fade = ag:CreateAnimation("Alpha")
-        fade:SetFromAlpha(1)
-        fade:SetToAlpha(0)
-        fade:SetDuration(1.2)
-        fade:SetSmoothing("OUT")
-        
-        ag:SetScript("OnFinished", function() fs:Hide() end)
-        
-        row.floatText = fs
-        row.floatAnim = ag
-    end
+    local duration = math.max(1, math.min(60, tonumber(GuildZoneOverviewDB.floatingLineDurationSec) or 10))
+    local removeAt = GetTime() + duration
 
-    local fs = row.floatText
-    fs:ClearAllPoints()
-    fs:SetPoint("RIGHT", row.btn, "RIGHT", -15, 0)
-    
-    if diff > 0 then
-        fs:SetText("+" .. diff)
-        fs:SetTextColor(0.2, 1, 0.2) -- Grün
-    else
-        fs:SetText(tostring(diff))
-        fs:SetTextColor(1, 0.2, 0.2) -- Rot
+    if not row.floatingLineContainer then
+        row.floatingLineContainer = CreateFrame("Frame", nil, row.btn)
+        row.floatingLineContainer:SetPoint("RIGHT", row.btn, "RIGHT", -LINE_OFFSET_RIGHT, 0)
+        row.floatingLineContainer:SetSize(1, LINE_HEIGHT)
+        row.floatingLines = {}
     end
-    
-    fs:Show()
-    row.floatAnim:Stop()
-    row.floatAnim:Play()
+    local container, list = row.floatingLineContainer, row.floatingLines
+    local n = #list
+    local lastTex = n > 0 and list[n].tex or nil
+    local count = math.abs(diff)
+    local isGreen = diff > 0
+    local r, g, b = isGreen and LINE_GREEN[1] or LINE_RED[1], isGreen and LINE_GREEN[2] or LINE_RED[2], isGreen and LINE_GREEN[3] or LINE_RED[3]
+
+    for j = 1, count do
+        local tex = container:CreateTexture(nil, "OVERLAY")
+        tex:SetColorTexture(r, g, b, 1)
+        tex:SetSize(LINE_WIDTH, LINE_HEIGHT)
+        tex:ClearAllPoints()
+        if not lastTex then
+            tex:SetPoint("LEFT", container, "LEFT", 0, 0)
+        else
+            tex:SetPoint("LEFT", lastTex, "RIGHT", LineGapForIndex(n + j), 0)
+        end
+        lastTex = tex
+        list[#list + 1] = { tex = tex, removeAt = removeAt }
+    end
 end
+
+local floatingLineTicker
+local function StartFloatingLineTicker()
+    if floatingLineTicker then return end
+    floatingLineTicker = C_Timer.NewTicker(0.5, function()
+        if not frame or not frame:IsShown() then return end
+        local now = GetTime()
+        for _, key in ipairs(FLOATING_LINE_KEYS) do
+            local row = categoryRows[key]
+            if row and row.floatingLines and #row.floatingLines > 0 then
+                local removed
+                local i, n = 1, #row.floatingLines
+                while i <= n do
+                    if row.floatingLines[i].removeAt <= now then
+                        local entry = table.remove(row.floatingLines, i)
+                        if entry and entry.tex then entry.tex:SetParent(nil); entry.tex = nil end
+                        n, removed = n - 1, true
+                    else
+                        i = i + 1
+                    end
+                end
+                if removed then RepositionFloatingLines(row) end
+            end
+        end
+    end)
+end
+StartFloatingLineTicker()
 
 local detailsFrame = CreateFrame("Frame", nil, frame)
 detailsFrame:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -2)
@@ -798,10 +848,34 @@ do
         PlayOnlineBlink()
     end)
 
-    -- Abschnitt: Veränderungen tracken (Floating +1/-1 pro Kategorie, Test-Buttons)
+    -- Abschnitt: Veränderungen tracken (Striche grün/rot pro Kategorie, Test-Buttons)
     local trackTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     trackTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -338)
     trackTitle:SetText("Veränderungen tracken")
+
+    local lineDurationLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    lineDurationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -358)
+    lineDurationLabel:SetText("Strich-Anzeige Dauer (Sekunden)")
+
+    local lineDurationSlider = CreateFrame("Slider", "GZOLineDurationSlider", panel, "OptionsSliderTemplate")
+    lineDurationSlider:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -378)
+    lineDurationSlider:SetWidth(200)
+    lineDurationSlider:SetMinMaxValues(1, 60)
+    lineDurationSlider:SetValueStep(1)
+    lineDurationSlider:SetObeyStepOnDrag(true)
+    local skipLineDurationSliderWrite = false
+    local lineLow, lineHigh = lineDurationSlider:GetName() .. "Low", lineDurationSlider:GetName() .. "High"
+    if _G[lineLow] then _G[lineLow]:SetText("1") end
+    if _G[lineHigh] then _G[lineHigh]:SetText("60") end
+    local lineDurationValueText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    lineDurationValueText:SetPoint("LEFT", lineDurationSlider, "RIGHT", 12, 0)
+    lineDurationSlider:SetScript("OnValueChanged", function(self, value)
+        value = math.floor(value + 0.5)
+        if not skipLineDurationSliderWrite then
+            GuildZoneOverviewDB.floatingLineDurationSec = value
+        end
+        lineDurationValueText:SetText(tostring(value))
+    end)
 
     -- Test-Zeile in der nächsten freien Zeile unter den sichtbaren Kategorien (layoutBottomY aus UpdateGuildZoneCounts)
     local function makeTrackRow(y, key, label, dbKey)
@@ -837,16 +911,20 @@ do
         btnMinus:SetScript("OnClick", function() runFloatingSimulation(-1) end)
         return cb
     end
-    local trackInstCheck = makeTrackRow(-366, "instance", "Instanzen", "trackChangesInstance")
-    local trackRaidCheck = makeTrackRow(-394, "raid", "Raids", "trackChangesRaid")
-    local trackDelveCheck = makeTrackRow(-422, "delve", "Tiefen", "trackChangesDelve")
+    local trackInstCheck = makeTrackRow(-398, "instance", "Instanzen", "trackChangesInstance")
+    local trackRaidCheck = makeTrackRow(-426, "raid", "Raids", "trackChangesRaid")
+    local trackDelveCheck = makeTrackRow(-454, "delve", "Tiefen", "trackChangesDelve")
 
     panel.refresh = function()
         skipDurationSliderWrite = true
         durationSlider:SetValue(GuildZoneOverviewDB.animationDurationSec or 10)
         durationValueText:SetText(tostring(GuildZoneOverviewDB.animationDurationSec or 10))
         skipDurationSliderWrite = false
-        
+        skipLineDurationSliderWrite = true
+        lineDurationSlider:SetValue(GuildZoneOverviewDB.floatingLineDurationSec or 10)
+        lineDurationValueText:SetText(tostring(GuildZoneOverviewDB.floatingLineDurationSec or 10))
+        skipLineDurationSliderWrite = false
+
         bgClassColorCheck:SetChecked(GuildZoneOverviewDB.useClassColorBackground)
         animClassColorCheck:SetChecked(GuildZoneOverviewDB.useClassColorAnimation)
         pulseCheck:SetChecked(GuildZoneOverviewDB.pulseWhenInactive)
