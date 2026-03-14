@@ -475,13 +475,26 @@ detailsFrame:SetScript("OnLeave", RefreshAlpha)
 
 local DETAIL_INDICATOR_SIZE = 8
 local DETAIL_INDICATOR_GAP = 4
+local SEPARATOR_HEIGHT = 2
+local SEPARATOR_PADDING = 4
 local detailLines = {}
+local detailSeparators = {}
 
 local function ClearDetailLines()
     for _, entry in ipairs(detailLines) do
         if entry.fs then entry.fs:SetText(""); entry.fs:Hide() end
         if entry.tex then entry.tex:Hide() end
     end
+    for _, sep in ipairs(detailSeparators) do sep:Hide() end
+end
+
+local function GetSeparatorLine(i)
+    if not detailSeparators[i] then
+        detailSeparators[i] = detailsFrame:CreateTexture(nil, "OVERLAY")
+        detailSeparators[i]:SetHeight(SEPARATOR_HEIGHT)
+        detailSeparators[i]:SetColorTexture(0.35, 0.35, 0.4, 0.7)
+    end
+    return detailSeparators[i]
 end
 
 local function ShowDetails(categoryKey)
@@ -504,9 +517,22 @@ local function ShowDetails(categoryKey)
     local yOffset = -10
     local index = 1
     local leftWithIndicator = 10 + DETAIL_INDICATOR_SIZE + DETAIL_INDICATOR_GAP
+    local prevZone = nil
+    local sepCount = 0
 
     if members and #members > 0 then
         for _, info in ipairs(members) do
+            if (categoryKey == "other" or categoryKey == "instance" or categoryKey == "raid") and prevZone and info.zone ~= prevZone then
+                sepCount = sepCount + 1
+                local sep = GetSeparatorLine(sepCount)
+                sep:ClearAllPoints()
+                sep:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset)
+                sep:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", -10, yOffset)
+                sep:Show()
+                yOffset = yOffset - SEPARATOR_HEIGHT - SEPARATOR_PADDING
+            end
+            prevZone = info.zone
+
             local entry = detailLines[index]
             if not entry then
                 entry = {}
@@ -546,6 +572,9 @@ local function ShowDetails(categoryKey)
 
             yOffset = yOffset - 16
             index = index + 1
+        end
+        for i = sepCount + 1, #detailSeparators do
+            detailSeparators[i]:Hide()
         end
     else
         local entry = detailLines[1]
