@@ -1,6 +1,6 @@
-## Interface number for The War Within (12.0.1).
+## Interface number for Midnight (12.0.1).
 ## If this ever mismatches, update to the current Interface from another working addon.
-## For many War Within builds this is 120000 or slightly higher; adjust if needed.
+## For 12.0.x builds this is 120000 or slightly higher; adjust if needed.
 ## Title and basic metadata
 ## Note: The folder name and the Title are independent, but the folder MUST be GuildZoneOverview.
 

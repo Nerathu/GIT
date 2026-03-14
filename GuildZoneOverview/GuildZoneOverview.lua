@@ -3,14 +3,19 @@
 
     Zeigt online Gildenmitglieder nach Kategorien (Instanzen, Raids, Tiefen, Städte, Sonstiges).
     Sichtbar je nach Option auch in Gruppe (z. B. in Tiefen). Klick auf eine Kategorie öffnet
-    die Detail-Liste (Name - Zone, klassengefärbt). Bei Änderungen in Instanz/Raid/Tiefe erscheinen
-    optional grüne/rote Striche (ein Strich pro Änderung); neue Striche werden rechts angehängt,
-    nach jedem 5. Strich ein Abstand, Anzeige-Dauer in den Optionen einstellbar (Standard 10 s).
+    die Detail-Liste (Name - Zone, klassengefärbt). Pro Kategorie eigene Schriftfarbe; in der
+    Detail-Liste optional Dauer-Indikator (grün 0–10 min, orange 10–40 min, rot >40 min in Zone)
+    und Zonen-Trenner bei Sonstiges/Instanzen/Raids.
+
+    Bei Änderungen in Instanz/Raid/Tiefe erscheinen optional grüne/rote Striche (ein Strich pro
+    Änderung); neue Striche rechts angehängt, nach jedem 5. Strich ein Abstand, Dauer einstellbar.
+    GUILD_ROSTER_UPDATE wird gedebounced (0,75 s), um bei großen Gilden Performance-Spitzen zu vermeiden.
 
     Optionen (Interface → AddOns → Gilden Zonenübersicht):
-    - Allgemein: Fenster-Hintergrund, Klassenfarbe, Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen (z. B. Tiefen).
-    - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen". Bei der Online-Benachrichtigung blinkt der obere Balken; ein Countdown-Balken unten zeigt die verbleibende Dauer an.
-    - Veränderungen tracken: Strich-Anzeige Dauer (Sekunden), Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen der Strich-Anzeige.
+    - Allgemein: Fenster-Hintergrund, Klassenfarbe, Pulsierung wenn inaktiv, Fenster auch in Gruppe anzeigen.
+    - Animation & Benachrichtigung: Dauer, Farbe, Klassenfarbe, Sound bei "jemand online", Button "Online-Anzeige testen".
+      Oben blinkender Balken, unten Countdown-Balken für verbleibende Dauer.
+    - Veränderungen tracken: Strich-Anzeige Dauer (Sekunden), Checkboxen Instanzen/Raids/Tiefen, Buttons +1/-1 zum Testen.
 
     SavedVariables: GuildZoneOverviewDB
     DB-Keys: point, relativePoint, xOfs, yOfs, width, animationDurationSec, animationColor, backgroundColor,
@@ -24,26 +29,32 @@ local GuildZoneOverview = {}
 
 GuildZoneOverviewDB = GuildZoneOverviewDB or {}
 
+local DB_DEFAULTS = {
+    animationDurationSec = 10,
+    animationColor = { 1, 1, 1 },
+    useClassColorAnimation = false,
+    useClassColorBackground = false,
+    pulseWhenInactive = true,
+    playSoundOnOnline = true,
+    showFrameInGroup = true,
+    trackChangesInstance = true,
+    trackChangesRaid = true,
+    trackChangesDelve = true,
+    floatingLineDurationSec = 10,
+}
+
 local function ApplyDBDefaults()
     local db = _G["GuildZoneOverviewDB"]
     if type(db) ~= "table" then
         _G["GuildZoneOverviewDB"] = {}
         db = _G["GuildZoneOverviewDB"]
     end
-    db.animationDurationSec = db.animationDurationSec or 10
-    db.animationColor = db.animationColor or { 1, 1, 1 }
+    for key, default in pairs(DB_DEFAULTS) do
+        if db[key] == nil then db[key] = default end
+    end
     if not db.backgroundColor then
         db.backgroundColor = { 0.05, 0.05, 0.08, 0.9 }
     end
-    if db.useClassColorAnimation == nil then db.useClassColorAnimation = false end
-    if db.useClassColorBackground == nil then db.useClassColorBackground = false end
-    if db.pulseWhenInactive == nil then db.pulseWhenInactive = true end
-    if db.playSoundOnOnline == nil then db.playSoundOnOnline = true end
-    if db.showFrameInGroup == nil then db.showFrameInGroup = true end
-    if db.trackChangesInstance == nil then db.trackChangesInstance = true end
-    if db.trackChangesRaid == nil then db.trackChangesRaid = true end
-    if db.trackChangesDelve == nil then db.trackChangesDelve = true end
-    if db.floatingLineDurationSec == nil then db.floatingLineDurationSec = 10 end
 end
 
 local function GetPlayerClassColor()
@@ -94,6 +105,10 @@ local DURATION_BUCKETS = {
     { maxMin = 40,  color = { 0.95, 0.65, 0.35 } }, -- 10–40 min: Orange
     { maxMin = 1e9, color = { 0.9, 0.35, 0.35 } }, -- >40 min: Rot
 }
+local ORDERED_CATEGORY_KEYS = { "instance", "raid", "delve", "city", "other" }
+local CATEGORY_LABELS = { instance = "Instanzen", raid = "Raids", delve = "Tiefen", city = "Städte", other = "Sonstiges" }
+local CATEGORIES_WITH_ZONE_SEPARATOR = { other = true, instance = true, raid = true }
+local TRACK_CHANGES_DB_KEYS = { instance = "trackChangesInstance", raid = "trackChangesRaid", delve = "trackChangesDelve" }
 -- Y unter der letzten sichtbaren Kategoriezeile (für Test-Floating: Zeile darunter anzeigen)
 local layoutBottomY = -26
 
@@ -108,6 +123,7 @@ local function ClassifyZone(zoneName)
     else return "other" end
 end
 
+-- Liefert Dauer-Farbe (grün/orange/rot) für Anzeige in der Detail-Liste.
 local function GetDurationColor(minutes)
     if not minutes or minutes < 0 then return nil end
     for _, b in ipairs(DURATION_BUCKETS) do
@@ -136,6 +152,7 @@ end)
 local INACTIVE_ALPHA = 0.55
 local ACTIVE_ALPHA = 1.0
 local PULSE_ALPHA_MIN, PULSE_ALPHA_MAX = 0.45, 0.58
+local PULSE_ALPHA_MID = (PULSE_ALPHA_MIN + PULSE_ALPHA_MAX) / 2
 frame:SetAlpha(INACTIVE_ALPHA)
 
 local function CreateTexture(parent, layer, r, g, b, a, h)
@@ -270,8 +287,14 @@ local CATEGORY_TEXT_COLORS = {
     raid     = { 0.72, 0.58, 0.92 },   -- Lila
     delve    = { 0.45, 0.68, 0.52 },   -- Sanftes Grün
     city     = { 0.92, 0.72, 0.82 },   -- Rosa
-    other    = { 0.52, 0.52, 0.56 },   -- Angenehmes Grau (wie zuvor Tiefen)
+    other    = { 0.52, 0.52, 0.56 },   -- Angenehmes Grau
 }
+local HUE_COLORS = {
+    cyan   = { CreateColor(0.0, 0.3, 0.5, 0.3), CreateColor(0.0, 0.1, 0.2, 0.3), CreateColor(0.0, 0.5, 0.8, 0.5) },
+    violet = { CreateColor(0.4, 0.1, 0.6, 0.3), CreateColor(0.15, 0.0, 0.3, 0.3), CreateColor(0.6, 0.2, 0.9, 0.5) },
+}
+local ROW_Y_START, ROW_STEP = -26, -18
+local ROW_HUE = { instance = "cyan", raid = "violet", delve = "cyan", city = "violet", other = "cyan" }
 
 local function CreateRow(yOffset, hue, label, textColorR, textColorG, textColorB)
     local tr, tg, tb = textColorR or 0.8, textColorG or 0.8, textColorB or 0.8
@@ -282,13 +305,8 @@ local function CreateRow(yOffset, hue, label, textColorR, textColorG, textColorB
 
     local bar = btn:CreateTexture(nil, "BACKGROUND")
     bar:SetAllPoints()
-    
-    local topColor, bottomColor, hoverColor
-    if hue == "cyan" then
-        topColor, bottomColor, hoverColor = CreateColor(0.0, 0.3, 0.5, 0.3), CreateColor(0.0, 0.1, 0.2, 0.3), CreateColor(0.0, 0.5, 0.8, 0.5)
-    else
-        topColor, bottomColor, hoverColor = CreateColor(0.4, 0.1, 0.6, 0.3), CreateColor(0.15, 0.0, 0.3, 0.3), CreateColor(0.6, 0.2, 0.9, 0.5)
-    end
+    local colors = HUE_COLORS[hue] or HUE_COLORS.violet
+    local topColor, bottomColor, hoverColor = colors[1], colors[2], colors[3]
     bar:SetGradient("VERTICAL", bottomColor, topColor)
 
     local text = btn:CreateFontString(nil, "OVERLAY", "GZOLineFont")
@@ -317,19 +335,13 @@ local function CreateRow(yOffset, hue, label, textColorR, textColorG, textColorB
     return btn, text
 end
 
-local btnInst, instancesText = CreateRow(-26, "cyan", "Instanzen", CATEGORY_TEXT_COLORS.instance[1], CATEGORY_TEXT_COLORS.instance[2], CATEGORY_TEXT_COLORS.instance[3])
-local btnRaid, raidsText = CreateRow(-44, "violet", "Raids", CATEGORY_TEXT_COLORS.raid[1], CATEGORY_TEXT_COLORS.raid[2], CATEGORY_TEXT_COLORS.raid[3])
-local btnDelve, delvesText = CreateRow(-62, "cyan", "Tiefen", CATEGORY_TEXT_COLORS.delve[1], CATEGORY_TEXT_COLORS.delve[2], CATEGORY_TEXT_COLORS.delve[3])
-local btnCity, citiesText = CreateRow(-80, "violet", "Städte", CATEGORY_TEXT_COLORS.city[1], CATEGORY_TEXT_COLORS.city[2], CATEGORY_TEXT_COLORS.city[3])
-local btnOther, otherText = CreateRow(-98, "cyan", "Sonstiges", CATEGORY_TEXT_COLORS.other[1], CATEGORY_TEXT_COLORS.other[2], CATEGORY_TEXT_COLORS.other[3])
-
-local categoryRows = {
-    instance = { btn = btnInst,  text = instancesText },
-    raid     = { btn = btnRaid,  text = raidsText     },
-    delve    = { btn = btnDelve, text = delvesText    },
-    city     = { btn = btnCity,  text = citiesText    },
-    other    = { btn = btnOther, text = otherText     },
-}
+local categoryRows = {}
+for i, key in ipairs(ORDERED_CATEGORY_KEYS) do
+    local y = ROW_Y_START + (i - 1) * ROW_STEP
+    local col = CATEGORY_TEXT_COLORS[key]
+    local btn, text = CreateRow(y, ROW_HUE[key], CATEGORY_LABELS[key], col[1], col[2], col[3])
+    categoryRows[key] = { btn = btn, text = text }
+end
 
 --[[ Striche (grün/rot) für Änderungen: ein Strich pro +1/-1, rechts angehängt, nach 5ern Abstand. ]]
 local LINE_WIDTH, LINE_HEIGHT = 3, 12
@@ -435,12 +447,16 @@ dTopBorder:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", 0, 0)
 
 detailsFrame:EnableMouse(true)
 
+local function ShouldUseActiveAlpha()
+    return isAnimatingAlert or (detailsFrame:IsShown() and currentDetailsCategory ~= nil) or frame:IsMouseOver() or detailsFrame:IsMouseOver()
+end
+
 function RefreshAlpha()
-    if isAnimatingAlert or (detailsFrame:IsShown() and currentDetailsCategory ~= nil) or frame:IsMouseOver() or detailsFrame:IsMouseOver() then
+    if ShouldUseActiveAlpha() then
         frame:SetAlpha(ACTIVE_ALPHA)
         detailsFrame:SetAlpha(ACTIVE_ALPHA)
     else
-        local a = (GuildZoneOverviewDB.pulseWhenInactive and (PULSE_ALPHA_MIN + PULSE_ALPHA_MAX) / 2) or INACTIVE_ALPHA
+        local a = (GuildZoneOverviewDB.pulseWhenInactive and PULSE_ALPHA_MID) or INACTIVE_ALPHA
         frame:SetAlpha(a)
         detailsFrame:SetAlpha(a)
     end
@@ -450,7 +466,7 @@ local pulsePhase = 0
 if C_Timer and C_Timer.NewTicker then
     C_Timer.NewTicker(0.05, function()
         if not frame:IsShown() then return end
-        if isAnimatingAlert or (detailsFrame:IsShown() and currentDetailsCategory ~= nil) or frame:IsMouseOver() or detailsFrame:IsMouseOver() then
+        if ShouldUseActiveAlpha() then
             frame:SetAlpha(ACTIVE_ALPHA)
             detailsFrame:SetAlpha(ACTIVE_ALPHA)
             return
@@ -458,7 +474,7 @@ if C_Timer and C_Timer.NewTicker then
         if GuildZoneOverviewDB.pulseWhenInactive then
             pulsePhase = pulsePhase + 0.02
             if pulsePhase > 1 then pulsePhase = 0 end
-            local a = PULSE_ALPHA_MIN + (PULSE_ALPHA_MAX - PULSE_ALPHA_MIN) * (0.5 + 0.5 * math.sin(pulsePhase * 2 * math.pi))
+            local a = PULSE_ALPHA_MID + (PULSE_ALPHA_MAX - PULSE_ALPHA_MIN) * 0.5 * math.sin(pulsePhase * 2 * math.pi)
             frame:SetAlpha(a)
             detailsFrame:SetAlpha(a)
         else
@@ -475,6 +491,10 @@ detailsFrame:SetScript("OnLeave", RefreshAlpha)
 
 local DETAIL_INDICATOR_SIZE = 8
 local DETAIL_INDICATOR_GAP = 4
+local DETAIL_LEFT_PAD = 10
+local DETAIL_RIGHT_PAD = -10
+local DETAIL_ROW_HEIGHT = 16
+local DETAIL_TOP_PAD = 10
 local SEPARATOR_HEIGHT = 2
 local SEPARATOR_PADDING = 4
 local detailLines = {}
@@ -497,6 +517,32 @@ local function GetSeparatorLine(i)
     return detailSeparators[i]
 end
 
+local function GetClassColorForDetail(class)
+    if not class then return 1, 1, 1 end
+    local c = (CUSTOM_CLASS_COLORS and CUSTOM_CLASS_COLORS[class]) or (RAID_CLASS_COLORS and RAID_CLASS_COLORS[class])
+    if c then return c.r, c.g, c.b end
+    return 1, 1, 1
+end
+
+local function SetDetailLineStyle(fs)
+    fs:SetJustifyH("LEFT")
+    fs:SetWordWrap(false)
+    fs:SetMaxLines(1)
+end
+
+local function EnsureDetailEntry(index)
+    if not detailLines[index] then
+        detailLines[index] = {
+            tex = detailsFrame:CreateTexture(nil, "OVERLAY"),
+            fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont"),
+        }
+        detailLines[index].tex:SetSize(DETAIL_INDICATOR_SIZE, DETAIL_INDICATOR_SIZE)
+        detailLines[index].tex:SetColorTexture(0.5, 0.5, 0.5, 1)
+        SetDetailLineStyle(detailLines[index].fs)
+    end
+    return detailLines[index]
+end
+
 local function ShowDetails(categoryKey)
     local members = membersByCategory[categoryKey]
 
@@ -514,38 +560,30 @@ local function ShowDetails(categoryKey)
     currentDetailsCategory = categoryKey
     ClearDetailLines()
 
-    local yOffset = -10
+    local yOffset = -DETAIL_TOP_PAD
     local index = 1
-    local leftWithIndicator = 10 + DETAIL_INDICATOR_SIZE + DETAIL_INDICATOR_GAP
-    local prevZone = nil
-    local sepCount = 0
+    local leftWithIndicator = DETAIL_LEFT_PAD + DETAIL_INDICATOR_SIZE + DETAIL_INDICATOR_GAP
+    local prevZone, sepCount = nil, 0
 
     if members and #members > 0 then
         for _, info in ipairs(members) do
-            if (categoryKey == "other" or categoryKey == "instance" or categoryKey == "raid") and prevZone and info.zone ~= prevZone then
+            -- Zonen-Trenner (Sonstiges, Instanzen, Raids) bei Zonenwechsel
+            if CATEGORIES_WITH_ZONE_SEPARATOR[categoryKey] and prevZone and info.zone ~= prevZone then
                 sepCount = sepCount + 1
                 local sep = GetSeparatorLine(sepCount)
                 sep:ClearAllPoints()
-                sep:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset)
-                sep:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", -10, yOffset)
+                sep:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", DETAIL_LEFT_PAD, yOffset)
+                sep:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", DETAIL_RIGHT_PAD, yOffset)
                 sep:Show()
                 yOffset = yOffset - SEPARATOR_HEIGHT - SEPARATOR_PADDING
             end
             prevZone = info.zone
 
-            local entry = detailLines[index]
-            if not entry then
-                entry = {}
-                entry.tex = detailsFrame:CreateTexture(nil, "OVERLAY")
-                entry.tex:SetSize(DETAIL_INDICATOR_SIZE, DETAIL_INDICATOR_SIZE)
-                entry.tex:SetColorTexture(0.5, 0.5, 0.5, 1)
-                entry.fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont")
-                detailLines[index] = entry
-            end
+            local entry = EnsureDetailEntry(index)
             local fs, tex = entry.fs, entry.tex
 
             tex:ClearAllPoints()
-            tex:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset - 4)
+            tex:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", DETAIL_LEFT_PAD, yOffset - 4)
             if info.durationColor then
                 tex:SetColorTexture(info.durationColor[1], info.durationColor[2], info.durationColor[3], 1)
                 tex:Show()
@@ -555,50 +593,31 @@ local function ShowDetails(categoryKey)
 
             fs:ClearAllPoints()
             fs:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", leftWithIndicator, yOffset)
-            fs:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", -10, yOffset)
-
-            local r, g, b = 1, 1, 1
-            if info.class then
-                local c = (CUSTOM_CLASS_COLORS and CUSTOM_CLASS_COLORS[info.class]) or (RAID_CLASS_COLORS and RAID_CLASS_COLORS[info.class])
-                if c then r, g, b = c.r, c.g, c.b end
-            end
+            fs:SetPoint("TOPRIGHT", detailsFrame, "TOPRIGHT", DETAIL_RIGHT_PAD, yOffset)
 
             fs:SetText(info.displayText)
-            fs:SetTextColor(r, g, b)
-            fs:SetJustifyH("LEFT")
-            fs:SetWordWrap(false)
-            fs:SetMaxLines(1)
+            fs:SetTextColor(GetClassColorForDetail(info.class))
             fs:Show()
 
-            yOffset = yOffset - 16
+            yOffset = yOffset - DETAIL_ROW_HEIGHT
             index = index + 1
         end
         for i = sepCount + 1, #detailSeparators do
             detailSeparators[i]:Hide()
         end
     else
-        local entry = detailLines[1]
-        if not entry then
-            entry = {}
-            entry.tex = detailsFrame:CreateTexture(nil, "OVERLAY")
-            entry.tex:SetSize(DETAIL_INDICATOR_SIZE, DETAIL_INDICATOR_SIZE)
-            entry.fs = detailsFrame:CreateFontString(nil, "OVERLAY", "GZOLineFont")
-            detailLines[1] = entry
-        end
-        if entry.tex then entry.tex:Hide() end
+        local entry = EnsureDetailEntry(1)
+        entry.tex:Hide()
         local fs = entry.fs
         fs:ClearAllPoints()
-        fs:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", 10, yOffset)
+        fs:SetPoint("TOPLEFT", detailsFrame, "TOPLEFT", DETAIL_LEFT_PAD, yOffset)
         fs:SetText("Keine Spieler online")
         fs:SetTextColor(0.5, 0.5, 0.5)
-        fs:SetJustifyH("LEFT")
-        fs:SetWordWrap(false)
-        fs:SetMaxLines(1)
         fs:Show()
-        yOffset = yOffset - 16
+        yOffset = yOffset - DETAIL_ROW_HEIGHT
     end
 
-    local desiredHeight = math.abs(yOffset) + 10
+    local desiredHeight = math.abs(yOffset) + DETAIL_TOP_PAD
     detailsFrame:SetHeight(desiredHeight)
 
     detailsFrame:ClearAllPoints()
@@ -615,11 +634,9 @@ local function ShowDetails(categoryKey)
     RefreshAlpha()
 end
 
-btnInst:SetScript("OnClick", function() ShowDetails("instance") end)
-btnRaid:SetScript("OnClick", function() ShowDetails("raid") end)
-btnDelve:SetScript("OnClick", function() ShowDetails("delve") end)
-btnCity:SetScript("OnClick", function() ShowDetails("city") end)
-btnOther:SetScript("OnClick", function() ShowDetails("other") end)
+for _, key in ipairs(ORDERED_CATEGORY_KEYS) do
+    (function(k) categoryRows[k].btn:SetScript("OnClick", function() ShowDetails(k) end) end)(key)
+end
 
 local function RestorePosition()
     if GuildZoneOverviewDB.point then
@@ -648,12 +665,15 @@ local function UpdateGuildZoneCounts()
     for _, tbl in pairs(membersByCategory) do table.wipe(tbl) end
     local counts = { instance = 0, raid = 0, delve = 0, city = 0, other = 0 }
 
-    -- Aktuelle Online-Spieler (name -> zone) für Dauer-Tracking
+    -- Ein Durchlauf: Online-Liste + currentPlayers für Dauer-Tracking
+    local onlineList = {}
     local currentPlayers = {}
     for i = 1, GetNumGuildMembers() do
-        local name, _, _, _, _, zone, _, _, isOnline = GetGuildRosterInfo(i)
+        local name, _, _, _, _, zone, _, _, isOnline, _, class = GetGuildRosterInfo(i)
         if isOnline and name then
-            currentPlayers[name] = zone or "Unbekannte Zone"
+            zone = zone or "Unbekannte Zone"
+            currentPlayers[name] = zone
+            table.insert(onlineList, { name = name, zone = zone, class = class })
         end
     end
     local now = GetTime()
@@ -680,24 +700,19 @@ local function UpdateGuildZoneCounts()
 
     measureFS:SetFontObject(lineFont)
 
-    for i = 1, GetNumGuildMembers() do
-        local name, _, _, _, _, zone, _, _, isOnline, _, class = GetGuildRosterInfo(i)
-        if isOnline then
-            name = name or "?"
-            zone = zone or "Unbekannte Zone"
-            local category = ClassifyZone(zone)
-            
-            counts[category] = counts[category] + 1
-            local displayText = string.format("%s - %s", name, zone)
-            local durationMin = playerZoneFirstSeen[name] and (now - playerZoneFirstSeen[name]) / 60 or 0
-            local durationColor = (category ~= "other") and GetDurationColor(durationMin) or nil
-            table.insert(membersByCategory[category], { name = name, class = class, zone = zone, displayText = displayText, durationColor = durationColor })
+    for _, info in ipairs(onlineList) do
+        local name, zone, class = info.name, info.zone, info.class
+        local category = ClassifyZone(zone)
+        counts[category] = counts[category] + 1
+        local displayText = string.format("%s - %s", name, zone)
+        local durationMin = playerZoneFirstSeen[name] and (now - playerZoneFirstSeen[name]) / 60 or 0
+        local durationColor = (category ~= "other") and GetDurationColor(durationMin) or nil
+        table.insert(membersByCategory[category], { name = name, class = class, zone = zone, displayText = displayText, durationColor = durationColor })
 
-            measureFS:SetText(displayText)
-            local totalLineWidth = measureFS:GetStringWidth() or 0
-            if totalLineWidth > maxContentWidth then
-                maxContentWidth = totalLineWidth
-            end
+        measureFS:SetText(displayText)
+        local totalLineWidth = measureFS:GetStringWidth() or 0
+        if totalLineWidth > maxContentWidth then
+            maxContentWidth = totalLineWidth
         end
     end
 
@@ -706,11 +721,9 @@ local function UpdateGuildZoneCounts()
     frame:SetWidth(maxContentWidth)
     GuildZoneOverviewDB.width = maxContentWidth
 
-    instancesText:SetText("Instanzen: " .. counts.instance)
-    raidsText:SetText("Raids: " .. counts.raid)
-    delvesText:SetText("Tiefen: " .. counts.delve)
-    citiesText:SetText("Städte: " .. counts.city)
-    otherText:SetText("Sonstiges: " .. counts.other)
+    for _, key in ipairs(ORDERED_CATEGORY_KEYS) do
+        categoryRows[key].text:SetText(CATEGORY_LABELS[key] .. ": " .. counts[key])
+    end
 
     local totalOnline = counts.instance + counts.raid + counts.delve + counts.city + counts.other
     if prevOnlineCount ~= nil and totalOnline > prevOnlineCount then
@@ -718,10 +731,9 @@ local function UpdateGuildZoneCounts()
     end
     prevOnlineCount = totalOnline
 
-    local orderedKeys = { "instance", "raid", "delve", "city", "other" }
     local y = -26
     local step = -18
-    for _, key in ipairs(orderedKeys) do
+    for _, key in ipairs(ORDERED_CATEGORY_KEYS) do
         local row = categoryRows[key]
         if row and counts[key] and counts[key] > 0 then
             row.btn:Show()
@@ -733,14 +745,13 @@ local function UpdateGuildZoneCounts()
             row.btn:Hide()
         end
     end
-    layoutBottomY = y  -- nächste freie Y-Position (unter der letzten Zeile)
+    layoutBottomY = y
 
-    -- Floating Text Logik für Tiefen, Instanzen, Raids (nur wenn Option für Kategorie aktiv)
+    -- Grüne/rote Striche bei Änderung (nur wenn Option für Kategorie aktiv)
     if not isInitialLoad then
-        local floatCategories = { "instance", "raid", "delve" }
-        for _, key in ipairs(floatCategories) do
-            local track = (key == "instance" and GuildZoneOverviewDB.trackChangesInstance) or (key == "raid" and GuildZoneOverviewDB.trackChangesRaid) or (key == "delve" and GuildZoneOverviewDB.trackChangesDelve)
-            if track then
+        for _, key in ipairs(FLOATING_LINE_KEYS) do
+            local dbKey = TRACK_CHANGES_DB_KEYS[key]
+            if dbKey and GuildZoneOverviewDB[dbKey] then
                 local diff = counts[key] - (prevCategoryCounts[key] or 0)
                 if diff ~= 0 and categoryRows[key] and categoryRows[key].btn:IsShown() then
                     SpawnFloatingDiff(categoryRows[key], diff)
@@ -922,26 +933,29 @@ do
     durationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -176)
     durationLabel:SetText("Dauer (Sekunden)")
 
-    local durationSlider = CreateFrame("Slider", "GZODurationSlider", panel, "OptionsSliderTemplate")
-    durationSlider:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -196)
-    durationSlider:SetWidth(200)
-    durationSlider:SetMinMaxValues(1, 60)
-    durationSlider:SetValueStep(1)
-    durationSlider:SetObeyStepOnDrag(true)
-    local skipDurationSliderWrite = false
-    local lowLab, highLab = durationSlider:GetName() .. "Low", durationSlider:GetName() .. "High"
-    if _G[lowLab] then _G[lowLab]:SetText("1") end
-    if _G[highLab] then _G[highLab]:SetText("60") end
-    local durationValueText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    durationValueText:SetPoint("LEFT", durationSlider, "RIGHT", 12, 0)
-    
-    durationSlider:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value + 0.5)
-        if not skipDurationSliderWrite then
-            GuildZoneOverviewDB.animationDurationSec = value
-        end
-        durationValueText:SetText(tostring(value))
-    end)
+    local function makeDurationSlider(panel, sliderY, frameName, dbKey)
+        local cfg = { skipWrite = false, dbKey = dbKey }
+        local slider = CreateFrame("Slider", frameName, panel, "OptionsSliderTemplate")
+        slider:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, sliderY)
+        slider:SetWidth(200)
+        slider:SetMinMaxValues(1, 60)
+        slider:SetValueStep(1)
+        slider:SetObeyStepOnDrag(true)
+        local lowLab, highLab = slider:GetName() .. "Low", slider:GetName() .. "High"
+        if _G[lowLab] then _G[lowLab]:SetText("1") end
+        if _G[highLab] then _G[highLab]:SetText("60") end
+        local valueText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        valueText:SetPoint("LEFT", slider, "RIGHT", 12, 0)
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value + 0.5)
+            if not cfg.skipWrite then GuildZoneOverviewDB[dbKey] = value end
+            valueText:SetText(tostring(value))
+        end)
+        cfg.slider = slider
+        cfg.valueText = valueText
+        return cfg
+    end
+    local durationSliderConfig = makeDurationSlider(panel, -196, "GZODurationSlider", "animationDurationSec")
 
     local function animGetColor()
         local c = GuildZoneOverviewDB.animationColor or { 1, 1, 1 }
@@ -996,25 +1010,7 @@ do
     lineDurationLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -358)
     lineDurationLabel:SetText("Strich-Anzeige Dauer (Sekunden)")
 
-    local lineDurationSlider = CreateFrame("Slider", "GZOLineDurationSlider", panel, "OptionsSliderTemplate")
-    lineDurationSlider:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -378)
-    lineDurationSlider:SetWidth(200)
-    lineDurationSlider:SetMinMaxValues(1, 60)
-    lineDurationSlider:SetValueStep(1)
-    lineDurationSlider:SetObeyStepOnDrag(true)
-    local skipLineDurationSliderWrite = false
-    local lineLow, lineHigh = lineDurationSlider:GetName() .. "Low", lineDurationSlider:GetName() .. "High"
-    if _G[lineLow] then _G[lineLow]:SetText("1") end
-    if _G[lineHigh] then _G[lineHigh]:SetText("60") end
-    local lineDurationValueText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    lineDurationValueText:SetPoint("LEFT", lineDurationSlider, "RIGHT", 12, 0)
-    lineDurationSlider:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value + 0.5)
-        if not skipLineDurationSliderWrite then
-            GuildZoneOverviewDB.floatingLineDurationSec = value
-        end
-        lineDurationValueText:SetText(tostring(value))
-    end)
+    local lineDurationSliderConfig = makeDurationSlider(panel, -378, "GZOLineDurationSlider", "floatingLineDurationSec")
 
     -- Test-Zeile in der nächsten freien Zeile unter den sichtbaren Kategorien (layoutBottomY aus UpdateGuildZoneCounts)
     local function makeTrackRow(y, key, label, dbKey)
@@ -1060,15 +1056,15 @@ do
     local trackRaidCheck = makeTrackRow(-426, "raid", "Raids", "trackChangesRaid")
     local trackDelveCheck = makeTrackRow(-454, "delve", "Tiefen", "trackChangesDelve")
 
+    local durationSliderConfigs = { durationSliderConfig, lineDurationSliderConfig }
     panel.refresh = function()
-        skipDurationSliderWrite = true
-        durationSlider:SetValue(GuildZoneOverviewDB.animationDurationSec or 10)
-        durationValueText:SetText(tostring(GuildZoneOverviewDB.animationDurationSec or 10))
-        skipDurationSliderWrite = false
-        skipLineDurationSliderWrite = true
-        lineDurationSlider:SetValue(GuildZoneOverviewDB.floatingLineDurationSec or 10)
-        lineDurationValueText:SetText(tostring(GuildZoneOverviewDB.floatingLineDurationSec or 10))
-        skipLineDurationSliderWrite = false
+        for _, cfg in ipairs(durationSliderConfigs) do
+            cfg.skipWrite = true
+            local val = GuildZoneOverviewDB[cfg.dbKey] or 10
+            cfg.slider:SetValue(val)
+            cfg.valueText:SetText(tostring(val))
+            cfg.skipWrite = false
+        end
 
         bgRow.classCheck:SetChecked(GuildZoneOverviewDB.useClassColorBackground)
         animRow.classCheck:SetChecked(GuildZoneOverviewDB.useClassColorAnimation)
