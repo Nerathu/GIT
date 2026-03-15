@@ -1,16 +1,13 @@
-## Interface number for Midnight (12.0.1).
-## If this ever mismatches, update to the current Interface from another working addon.
-## For 12.0.x builds this is 120000 or slightly higher; adjust if needed.
-## Title and basic metadata
-## Note: The folder name and the Title are independent, but the folder MUST be GuildZoneOverview.
-
 ## Interface: 120000
 ## Title: Guild Zone Overview
 ## Title-deDE: Gilden Zonenübersicht
 ## Notes: Zeigt an, wie viele Gildenmitglieder in Instanzen, Raids und Städten sind (nur sichtbar, wenn du in keiner Gruppe bist).
 ## Author: roman + Cursor
-## Version: 1.4.0
+## Version: 1.4.1
 ## IconTexture: Interface\Icons\inv_misc_grouplooking
 ## SavedVariables: GuildZoneOverviewDB
 
-GuildZoneOverview.lua
+GuildZoneOverview_Data.lua
+GuildZoneOverview_Core.lua
+GuildZoneOverview_UI.lua
+GuildZoneOverview_Options.lua

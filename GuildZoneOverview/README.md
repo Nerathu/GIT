@@ -8,6 +8,8 @@ WoW-Addon für Retail (Midnight / 12.0.1), das in einem verschiebbaren Frame anz
 - **Änderungs-Striche:** Bei Änderungen in Instanz/Raid/Tiefe optional **grüne Striche** (mehr Spieler) bzw. **rote Striche** (weniger Spieler), pro Änderung ein Strich, rechts angehängt, nach jedem 5. Strich ein Abstand; Anzeige-Dauer in den Optionen einstellbar (1–60 s). Die Kategoriezeile (Instanz/Raid/Tiefe) **bleibt sichtbar**, bis alle Striche abgelaufen sind.
 - **Online-Hinweis:** Wenn mehr Gildenmitglieder online kommen: **blinkender oberer Balken** + **Countdown-Balken unten** (Dauer in Optionen, 1–60 s), optional Sound.
 - **Detail-Liste:** Wird bei **Roster-Update** aktualisiert (Count und Liste bleiben konsistent). Spieler in den **ersten 5 Minuten** in Instanz/Raid/Tiefe **blinken** leicht.
+- **Alt-zu-Main:** Die öffentliche Gildennotiz wird ausgewertet (z. B. „main, Mainname“, ein einzelner Name). Der Main-Name wird **nur angezeigt, wenn dieser Charakter in der Gilde existiert** (Verifikation gegen das Gildenroster); sonst erscheint der Twink-Name. Die **Klassenfarbe** in der Detail-Liste bleibt die des **aktuell eingeloggten Charakters**.
+- **Detail-Tooltip:** Beim Überfahren einer Spielerzeile in der Detail-Liste erscheint ein Tooltip mit dem Spielernamen.
 
 Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON_VERSION`).
 
@@ -17,7 +19,7 @@ Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON
 
 1. Ordner `GuildZoneOverview` nach  
    `World of Warcraft/_retail_/Interface/AddOns/GuildZoneOverview` kopieren.
-2. Enthalten sein müssen: `GuildZoneOverview.toc`, `GuildZoneOverview.lua`.
+2. Enthalten sein müssen: `GuildZoneOverview.toc`, `GuildZoneOverview_Data.lua`, `GuildZoneOverview_Core.lua`, `GuildZoneOverview_UI.lua`, `GuildZoneOverview_Options.lua`.
 3. WoW neu starten oder `/reload`, Addon im Charakter-Auswahlbildschirm aktivieren.
 
 ---
@@ -26,13 +28,15 @@ Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON
 
 - Liest das **Gilden-Roster** (Zone/Instanz) der Online-Mitglieder aus.
 - Ordnet jede Zone einer Kategorie zu:
-  - **Instanz** (5er-Dungeons, Midnight-Dungeons; siehe `DUNGEON_ZONES` in der Lua)
-  - **Raid** (`RAID_ZONES`)
-  - **Tiefen** (Delves; `DELVE_ZONES`)
-  - **Stadt** (Hauptstädte; `CITY_ZONES`)
+  - **Instanz** und **Raid** werden **dynamisch** aus dem **Abenteuerführer (Encounter Journal)** beim Addon-Start geladen.
+  - **Städte** (`CITY_ZONES`) und **Tiefen** (`DELVE_ZONES`) sind statisch. Zonennamen, die auch als offene Welt existieren (z. B. Zul'Aman), können in der **Blacklist** (`ZONE_AS_OTHER_BLACKLIST`) stehen und erscheinen dann als **Sonstiges**.
   - **Sonstiges** (alles andere)
 - **Dauer-Tracking:** Pro Spieler wird die Zeit in der aktuellen Zone erfasst; Wechsel der Zone setzt die Anzeige zurück.
 - **GUILD_ROSTER_UPDATE** wird um 0,75 s **gedebounced**, um bei großen Gilden Performance-Spitzen zu vermeiden.
+
+### Alt-zu-Main
+
+- Die öffentliche Gildennotiz wird pro Mitglied gelesen; erkannte Formate (z. B. „main, Mainname“, ein einzelnes Wort als Name) liefern den Main-Namen. Dieser wird **nur angezeigt, wenn der Charakter in der Gilde vorkommt** (Verifikation); sonst wird der Twink-Name angezeigt. Die Klassenfarbe bleibt die des aktuell online Charakters.
 
 ### UI
 
@@ -61,7 +65,6 @@ Die Versionsnummer findest du in `GuildZoneOverview.toc` und im Lua-Code (`ADDON
 
 ## Konfiguration / Erweiterung
 
-- Zonenzuordnung in `GuildZoneOverview.lua`:  
-  `CITY_ZONES`, `RAID_ZONES`, `DUNGEON_ZONES`, `DELVE_ZONES`.  
-  Weitere Zonennamen (de/en) können dort ergänzt werden.
-- **SavedVariables:** `GuildZoneOverviewDB` (Position, Breite, alle Optionen).
+- **RAID_ZONES** und **DUNGEON_ZONES** werden beim Addon-Start aus dem Abenteuerführer (EJ) befüllt und sind nicht manuell zu pflegen.
+- **CITY_ZONES**, **DELVE_ZONES** und **ZONE_AS_OTHER_BLACKLIST** sind in `GuildZoneOverview.lua` editierbar (z. B. weitere Städte, weitere Blacklist-Einträge bei Zonen/Instanz-Namenskonflikten).
+- **SavedVariables:** `GuildZoneOverviewDB` (Position, Breite, alle Optionen). Das Alt-zu-Main-Mapping wird nicht gespeichert (nur zur Laufzeit aus der Gildennotiz).
